@@ -134,11 +134,19 @@ class BattleManager {
     const battle = this.battles.get(battleId);
     if (!battle) return;
 
+    console.log(`[Battle ${battleId}] submitAction from ${userId}: action=${msg.action}, phase=${battle.phase}`);
+
     if (battle.phase === "forceSwapping") {
-      if (msg.action !== "swap" && msg.action !== "forceSwap") return;
+      if (msg.action !== "swap" && msg.action !== "forceSwap") {
+        console.log(`[Battle ${battleId}] Ignoring non-swap action during forceSwapping`);
+        return;
+      }
       const expectedSide = battle.forceSwapSide;
       const isP1 = userId === battle.player1.userId;
-      if ((expectedSide === "p1" && !isP1) || (expectedSide === "p2" && isP1)) return;
+      if ((expectedSide === "p1" && !isP1) || (expectedSide === "p2" && isP1)) {
+        console.log(`[Battle ${battleId}] Wrong player trying to force swap`);
+        return;
+      }
 
       const creatureIndex = Math.min(4, Math.max(0, Number(msg.creatureIndex) || 0));
       const side = isP1 ? battle.player1 : battle.player2;
@@ -149,7 +157,10 @@ class BattleManager {
       return;
     }
 
-    if (battle.phase !== "choosing") return;
+    if (battle.phase !== "choosing") {
+      console.log(`[Battle ${battleId}] Ignoring action, phase is ${battle.phase}`);
+      return;
+    }
 
     const action = {
       action: msg.action === "swap" ? "swap" : "ability",
@@ -179,6 +190,7 @@ class BattleManager {
   }
 
   completeForceSwap(battle, side, creatureIndex) {
+    console.log(`[Battle ${battle.id}] Force swap complete: ${side} -> creature ${creatureIndex}`);
     if (battle.turnTimer) clearTimeout(battle.turnTimer);
 
     const sideObj = side === "p1" ? battle.player1 : battle.player2;
