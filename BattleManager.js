@@ -1,7 +1,9 @@
 const { pool } = require("./db");
 const InventoryManager = require("./InventoryManager");
 
-const TURN_TIMEOUT_MS = 30000;
+const TURN_TIMEOUT_MS = 40000;
+const ELO_K = 32;
+const ELO_DEFAULT = 1500;
 
 class BattleManager {
   constructor() {
@@ -22,11 +24,15 @@ class BattleManager {
     if (p1Party.length === 0 || p2Party.length === 0) return null;
 
     const battleId = this.nextBattleId++;
+    const p1Name = player1.name || "Player";
+    const p2Name = isBot ? "Bot" : (player2.name || "Opponent");
+
     const battle = {
       id: battleId,
       player1: {
         ref: player1,
         userId: player1.userId,
+        name: p1Name,
         party: p1Party.map(cloneBattleCreature),
         activeIndex: 0,
         isBot: false,
@@ -34,6 +40,7 @@ class BattleManager {
       player2: {
         ref: isBot ? null : player2,
         userId: isBot ? "bot" : player2.userId,
+        name: p2Name,
         party: p2Party.map(cloneBattleCreature),
         activeIndex: 0,
         isBot,
@@ -42,6 +49,7 @@ class BattleManager {
       phase: "choosing",
       pendingActions: { p1: null, p2: null },
       turnTimer: null,
+      turnDuration: TURN_TIMEOUT_MS / 1000,
     };
 
     this.battles.set(battleId, battle);
@@ -55,22 +63,21 @@ class BattleManager {
       player2.battleId = battleId;
     }
 
-    const startMsg = {
+    player1.send({
       type: "battleStart",
       battleId,
-      yourParty: null,
-      opponentActive: null,
-    };
-
-    player1.send({
-      ...startMsg,
+      turnDuration: battle.turnDuration,
+      opponentName: p2Name,
       yourParty: battle.player1.party,
       opponentActive: sanitizeOpponent(battle.player2.party[0]),
     });
 
     if (!isBot) {
       player2.send({
-        ...startMsg,
+        type: "battleStart",
+        battleId,
+        turnDuration: battle.turnDuration,
+        opponentName: p1Name,
         yourParty: battle.player2.party,
         opponentActive: sanitizeOpponent(battle.player1.party[0]),
       });
@@ -85,17 +92,28 @@ class BattleManager {
     battle.turnTimer = setTimeout(() => {
       if (battle.phase !== "choosing") return;
       if (!battle.pendingActions.p1) {
-        battle.pendingActions.p1 = { action: "ability", abilitySlot: 0 };
+        battle.pendingActions.p1 = this.randomAbility(battle.player1);
       }
       if (!battle.pendingActions.p2) {
         if (battle.player2.isBot) {
           battle.pendingActions.p2 = this.botDecision(battle);
         } else {
-          battle.pendingActions.p2 = { action: "ability", abilitySlot: 0 };
+          battle.pendingActions.p2 = this.randomAbility(battle.player2);
         }
       }
       this.resolveTurn(battle);
     }, TURN_TIMEOUT_MS);
+  }
+
+  randomAbility(side) {
+    const creature = side.party[side.activeIndex];
+    if (!creature || !creature.abilities) return { action: "ability", abilitySlot: 0 };
+    const validSlots = [];
+    for (let i = 0; i < creature.abilities.length; i++) {
+      if (creature.abilities[i] && creature.abilities[i].abilityId) validSlots.push(i);
+    }
+    if (validSlots.length === 0) return { action: "ability", abilitySlot: 0 };
+    return { action: "ability", abilitySlot: validSlots[Math.floor(Math.random() * validSlots.length)] };
   }
 
   submitAction(battleId, userId, msg) {
@@ -160,7 +178,7 @@ class BattleManager {
       const p1Init = calcInitiative(p1Creature.speed, p1Ability.abilitySpeed);
       const p2Init = calcInitiative(p2Creature.speed, p2Ability.abilitySpeed);
 
-      let first, second, firstAction, secondAction, firstName, secondName;
+      let first, second;
       if (p1Init > p2Init) {
         first = "p1"; second = "p2";
       } else if (p2Init > p1Init) {
@@ -178,7 +196,6 @@ class BattleManager {
       }
 
       const sides = { p1: battle.player1, p2: battle.player2 };
-      const actions = { p1: p1Action, p2: p2Action };
       const abilities = { p1: p1Ability, p2: p2Ability };
 
       const firstResult = applyDamage(
@@ -279,7 +296,10 @@ class BattleManager {
     }
 
     if (p1Defeated || p2Defeated) {
-      const winner = p1Defeated ? "p2" : "p1";
+      let winner;
+      if (p1Defeated && p2Defeated) winner = "draw";
+      else if (p1Defeated) winner = "p2";
+      else winner = "p1";
       this.endBattle(battle, winner);
       return;
     }
@@ -290,18 +310,63 @@ class BattleManager {
     this.startTurnTimer(battle);
   }
 
-  endBattle(battle, winner) {
+  async endBattle(battle, winner) {
     if (battle.turnTimer) clearTimeout(battle.turnTimer);
 
-    const endMsg = { type: "battleEnd", winner };
+    let p1EloChange = 0, p2EloChange = 0, p1NewElo = 0, p2NewElo = 0;
+    const isPvp = !battle.player2.isBot;
 
-    battle.player1.ref.send(endMsg);
+    if (isPvp && winner) {
+      try {
+        const p1Elo = await getPlayerElo(battle.player1.userId);
+        const p2Elo = await getPlayerElo(battle.player2.userId);
+
+        if (winner === "draw") {
+          const e1 = calcEloChange(p1Elo, p2Elo, 0.5);
+          const e2 = calcEloChange(p2Elo, p1Elo, 0.5);
+          p1EloChange = e1; p2EloChange = e2;
+        } else if (winner === "p1") {
+          p1EloChange = calcEloChange(p1Elo, p2Elo, 1);
+          p2EloChange = calcEloChange(p2Elo, p1Elo, 0);
+        } else {
+          p1EloChange = calcEloChange(p1Elo, p2Elo, 0);
+          p2EloChange = calcEloChange(p2Elo, p1Elo, 1);
+        }
+
+        p1NewElo = Math.max(100, p1Elo + p1EloChange);
+        p2NewElo = Math.max(100, p2Elo + p2EloChange);
+
+        await pool.query("UPDATE users SET elo = $1 WHERE id = $2", [p1NewElo, battle.player1.userId]);
+        await pool.query("UPDATE users SET elo = $1 WHERE id = $2", [p2NewElo, battle.player2.userId]);
+      } catch (err) {
+        console.error("ELO update error:", err.message);
+      }
+    }
+
+    const p1Msg = {
+      type: "battleEnd",
+      winner: winner || "draw",
+      opponentName: battle.player2.name,
+      eloChange: p1EloChange,
+      newElo: p1NewElo,
+      isBot: battle.player2.isBot,
+    };
+    const p2Msg = {
+      type: "battleEnd",
+      winner: winner === "p1" ? "p2" : winner === "p2" ? "p1" : "draw",
+      opponentName: battle.player1.name,
+      eloChange: p2EloChange,
+      newElo: p2NewElo,
+      isBot: false,
+    };
+
+    battle.player1.ref.send(p1Msg);
     battle.player1.ref.inBattle = false;
     battle.player1.ref.battleId = null;
     this.playerBattleMap.delete(battle.player1.userId);
 
     if (!battle.player2.isBot && battle.player2.ref) {
-      battle.player2.ref.send(endMsg);
+      battle.player2.ref.send(p2Msg);
       battle.player2.ref.inBattle = false;
       battle.player2.ref.battleId = null;
       this.playerBattleMap.delete(battle.player2.userId);
@@ -309,7 +374,7 @@ class BattleManager {
 
     this.battles.delete(battle.id);
 
-    if (winner) {
+    if (winner && winner !== "draw") {
       const winnerSide = winner === "p1" ? battle.player1 : battle.player2;
       if (!winnerSide.isBot && winnerSide.ref && winnerSide.ref._questCallback) {
         winnerSide.ref._questCallback();
@@ -398,6 +463,16 @@ function sanitizeOpponent(creature) {
 
 function cloneBattleCreature(c) {
   return { ...c, abilities: c.abilities ? [...c.abilities] : [] };
+}
+
+async function getPlayerElo(userId) {
+  const r = await pool.query("SELECT elo FROM users WHERE id = $1", [userId]);
+  return r.rows.length > 0 ? r.rows[0].elo : ELO_DEFAULT;
+}
+
+function calcEloChange(myElo, oppElo, score) {
+  const expected = 1 / (1 + Math.pow(10, (oppElo - myElo) / 400));
+  return Math.round(ELO_K * (score - expected));
 }
 
 module.exports = BattleManager;

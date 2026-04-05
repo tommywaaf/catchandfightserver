@@ -83,6 +83,11 @@ async function initDB() {
         PRIMARY KEY (user_id, quest_id)
       );
     `);
+
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS elo INTEGER NOT NULL DEFAULT 1500;
+    `);
+
     console.log("Database tables initialized");
   } finally {
     client.release();
