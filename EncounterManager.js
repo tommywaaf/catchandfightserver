@@ -76,6 +76,31 @@ class EncounterManager {
     const shuffled = [...availableAbilities].sort(() => Math.random() - 0.5);
     const selectedAbilities = shuffled.slice(0, Math.min(4, shuffled.length));
 
+    const storageCount = await InventoryManager.getStorageCount(player.userId);
+    const partyCount = await InventoryManager.getPartyCount(player.userId);
+    const isFull = partyCount >= 5 && storageCount >= 500;
+
+    if (isFull) {
+      const lowest = await InventoryManager.getLowestStatCreature(player.userId);
+      const newTotal = stats.thermal + stats.density + stats.luminosity + stats.voltage + stats.stability + stats.magnetism + stats.speed;
+
+      player.send({
+        type: "storageFullOffer",
+        newCreature: {
+          speciesId: species.id,
+          speciesName: species.name,
+          ...stats,
+          currentHp: stats.hp,
+          maxHp: stats.hp,
+          abilities: selectedAbilities,
+          totalStats: newTotal,
+        },
+        lowestCreature: lowest,
+      });
+      player._pendingReplace = { speciesId: species.id, stats, abilityIds: selectedAbilities };
+      return;
+    }
+
     const result = await InventoryManager.addCreature(player.userId, species.id, stats, selectedAbilities);
 
     if (result.success) {

@@ -232,6 +232,82 @@ class InventoryManager {
     const r = await pool.query("SELECT COUNT(*) FROM player_creatures WHERE user_id = $1", [userId]);
     return parseInt(r.rows[0].count);
   }
+
+  static async getLowestStatCreature(userId) {
+    const result = await pool.query(
+      `SELECT pc.*, cs.name AS species_name, cs.base_hp,
+        (pc.thermal + pc.density + pc.luminosity + pc.voltage + pc.stability + pc.magnetism + pc.speed) AS total_stats,
+        json_agg(json_build_object('abilityId', a.id, 'name', a.name, 'baseDamage', a.base_damage,
+          'abilitySpeed', a.ability_speed, 'stat1', a.stat1, 'stat2', a.stat2, 'slot', ca.slot)
+          ORDER BY ca.slot) AS abilities
+       FROM player_creatures pc
+       JOIN creature_species cs ON pc.species_id = cs.id
+       LEFT JOIN creature_abilities ca ON ca.creature_id = pc.id
+       LEFT JOIN abilities a ON a.id = ca.ability_id
+       WHERE pc.user_id = $1
+       GROUP BY pc.id, cs.name, cs.base_hp
+       ORDER BY total_stats ASC
+       LIMIT 1`,
+      [userId]
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    const c = formatCreature(row);
+    c.totalStats = parseInt(row.total_stats);
+    return c;
+  }
+
+  static async releaseCreature(userId, creatureId) {
+    const totalCount = await this.getTotalCreatureCount(userId);
+    if (totalCount <= 1) return { success: false, error: "Must keep at least 1 creature" };
+
+    const creature = await pool.query(
+      "SELECT id, slot_type FROM player_creatures WHERE id = $1 AND user_id = $2",
+      [creatureId, userId]
+    );
+    if (creature.rows.length === 0) return { success: false, error: "Creature not found" };
+
+    await pool.query("DELETE FROM creature_abilities WHERE creature_id = $1", [creatureId]);
+    await pool.query("DELETE FROM player_creatures WHERE id = $1", [creatureId]);
+
+    if (creature.rows[0].slot_type === "party") {
+      await this.reindexParty(userId);
+    }
+
+    return { success: true };
+  }
+
+  static async replaceCreature(userId, oldCreatureId, speciesId, stats, abilityIds) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM creature_abilities WHERE creature_id = $1", [oldCreatureId]);
+      await client.query("DELETE FROM player_creatures WHERE id = $1 AND user_id = $2", [oldCreatureId, userId]);
+
+      const insertResult = await client.query(
+        `INSERT INTO player_creatures (user_id, species_id, current_hp, thermal, density, luminosity, voltage, stability, magnetism, speed, slot_type, party_position)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'storage', NULL)
+         RETURNING id`,
+        [userId, speciesId, stats.hp, stats.thermal, stats.density, stats.luminosity, stats.voltage, stats.stability, stats.magnetism, stats.speed]
+      );
+      const creatureId = insertResult.rows[0].id;
+
+      for (let slot = 0; slot < abilityIds.length && slot < 4; slot++) {
+        await client.query(
+          "INSERT INTO creature_abilities (creature_id, ability_id, slot) VALUES ($1, $2, $3)",
+          [creatureId, abilityIds[slot], slot]
+        );
+      }
+      await client.query("COMMIT");
+      return { success: true, creatureId };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("replaceCreature error:", err.message);
+      return { success: false, error: "Replace failed" };
+    } finally {
+      client.release();
+    }
+  }
 }
 
 function formatCreature(row) {

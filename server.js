@@ -113,6 +113,12 @@ function handleMessage(player, msg) {
     case "partyReorder":
       handlePartyReorder(player, msg);
       break;
+    case "releaseCreature":
+      handleReleaseCreature(player, msg);
+      break;
+    case "replaceCreature":
+      handleReplaceCreature(player, msg);
+      break;
     case "battleAction":
       handleBattleAction(player, msg);
       break;
@@ -271,6 +277,51 @@ async function handlePartyReorder(player, msg) {
   if (result.success) {
     player.party = await InventoryManager.getParty(player.userId);
     player.send({ type: "inventoryUpdated", party: player.party });
+  } else {
+    player.send({ type: "error", message: result.error });
+  }
+}
+
+async function handleReleaseCreature(player, msg) {
+  if (!player.authenticated) return;
+  const result = await InventoryManager.releaseCreature(player.userId, Number(msg.creatureId));
+  if (result.success) {
+    player.party = await InventoryManager.getParty(player.userId);
+    player.send({ type: "creatureReleased", creatureId: Number(msg.creatureId), party: player.party });
+  } else {
+    player.send({ type: "error", message: result.error });
+  }
+}
+
+async function handleReplaceCreature(player, msg) {
+  if (!player.authenticated || !player._pendingReplace) return;
+  const pending = player._pendingReplace;
+  player._pendingReplace = null;
+
+  if (!msg.accept) {
+    player.send({ type: "replaceCancelled" });
+    return;
+  }
+
+  const lowest = await InventoryManager.getLowestStatCreature(player.userId);
+  if (!lowest) {
+    player.send({ type: "error", message: "No creature to replace" });
+    return;
+  }
+
+  const result = await InventoryManager.replaceCreature(
+    player.userId, lowest.id, pending.speciesId, pending.stats, pending.abilityIds
+  );
+  if (result.success) {
+    const creature = await InventoryManager.getCreatureById(result.creatureId);
+    player.party = await InventoryManager.getParty(player.userId);
+    player.send({
+      type: "creatureCaught",
+      creature,
+      slotType: "storage",
+      replacedId: lowest.id,
+    });
+    await questManager.incrementQuest(player, "catch_10", 1);
   } else {
     player.send({ type: "error", message: result.error });
   }
