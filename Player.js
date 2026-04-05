@@ -12,6 +12,18 @@ class Player {
     this.rotY = 0;
     this.lastUpdate = Date.now();
     this.alive = true;
+
+    this.userId = null;
+    this.authenticated = false;
+    this.party = [];
+    this.quests = [];
+    this.encounterTimer = 0;
+    this.isInGrass = false;
+    this.inBattle = false;
+    this.battleId = null;
+    this.inMatchmaking = false;
+    this.matchmakingJoinedAt = null;
+    this.tradeSessionId = null;
   }
 
   send(message) {

@@ -1,0 +1,114 @@
+const { pool, initDB } = require("./db");
+
+const STAT_NAMES = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
+
+const ABILITIES = [
+  // Single-stat abilities
+  { name: "Thermal Lash", speed: 60, stat1: "thermal", stat2: null, desc: "A searing whip of heat" },
+  { name: "Freeze Snap", speed: 45, stat1: "thermal", stat2: null, desc: "Flash-freeze burst" },
+  { name: "Density Crush", speed: 30, stat1: "density", stat2: null, desc: "Compresses mass into a slam" },
+  { name: "Phase Shift", speed: 70, stat1: "density", stat2: null, desc: "Shifts between gas and solid" },
+  { name: "Lumen Blast", speed: 55, stat1: "luminosity", stat2: null, desc: "A burst of blinding light" },
+  { name: "Shadow Veil", speed: 65, stat1: "luminosity", stat2: null, desc: "Wraps in consuming darkness" },
+  { name: "Volt Strike", speed: 75, stat1: "voltage", stat2: null, desc: "An electric discharge" },
+  { name: "Ground Pulse", speed: 35, stat1: "voltage", stat2: null, desc: "Grounding shockwave" },
+  { name: "Chaos Burst", speed: 80, stat1: "stability", stat2: null, desc: "Unleashes unstable energy" },
+  { name: "Control Lock", speed: 40, stat1: "stability", stat2: null, desc: "Locks target in stasis" },
+  { name: "Repel Wave", speed: 50, stat1: "magnetism", stat2: null, desc: "Pushes away with force" },
+  { name: "Attract Pull", speed: 55, stat1: "magnetism", stat2: null, desc: "Draws target inward" },
+
+  // Dual-stat abilities
+  { name: "Solar Crush", speed: 45, stat1: "thermal", stat2: "luminosity", desc: "Concentrated solar energy" },
+  { name: "Storm Pull", speed: 60, stat1: "voltage", stat2: "magnetism", desc: "Magnetic lightning vortex" },
+  { name: "Frozen Stone", speed: 25, stat1: "thermal", stat2: "density", desc: "Ice encased in rock" },
+  { name: "Dark Current", speed: 70, stat1: "luminosity", stat2: "voltage", desc: "Shadow-charged electricity" },
+  { name: "Chaos Flame", speed: 85, stat1: "thermal", stat2: "stability", desc: "Unstable fire eruption" },
+  { name: "Magnet Crush", speed: 30, stat1: "density", stat2: "magnetism", desc: "Magnetic compression" },
+  { name: "Void Collapse", speed: 20, stat1: "luminosity", stat2: "density", desc: "Gravity well of darkness" },
+  { name: "Static Field", speed: 50, stat1: "voltage", stat2: "stability", desc: "Charged control barrier" },
+  { name: "Plasma Bolt", speed: 75, stat1: "thermal", stat2: "voltage", desc: "Superheated electric plasma" },
+  { name: "Gravity Shift", speed: 40, stat1: "density", stat2: "stability", desc: "Warps local gravity" },
+  { name: "Bright Lure", speed: 65, stat1: "luminosity", stat2: "magnetism", desc: "Dazzling attraction beam" },
+  { name: "Tidal Charge", speed: 55, stat1: "magnetism", stat2: "stability", desc: "Charged magnetic tide" },
+  { name: "Frost Circuit", speed: 50, stat1: "thermal", stat2: "magnetism", desc: "Frozen magnetic field" },
+  { name: "Quake Spark", speed: 35, stat1: "density", stat2: "voltage", desc: "Ground-shaking discharge" },
+  { name: "Prism Break", speed: 60, stat1: "luminosity", stat2: "stability", desc: "Shattered light shards" },
+  { name: "Iron Shade", speed: 45, stat1: "density", stat2: "luminosity", desc: "Dense shadow projectile" },
+  { name: "Chaos Magnet", speed: 90, stat1: "stability", stat2: "magnetism", desc: "Unstable magnetic field" },
+  { name: "Thunder Dark", speed: 80, stat1: "voltage", stat2: "luminosity", desc: "Lightning from the void" },
+];
+
+async function seed() {
+  await initDB();
+
+  const existingSpecies = await pool.query("SELECT COUNT(*) FROM creature_species");
+  if (parseInt(existingSpecies.rows[0].count) > 0) {
+    console.log("Database already seeded, skipping.");
+    process.exit(0);
+  }
+
+  console.log("Seeding abilities...");
+  const abilityIds = [];
+  const abilityStatMap = [];
+  for (const ab of ABILITIES) {
+    const r = await pool.query(
+      "INSERT INTO abilities (name, base_damage, ability_speed, stat1, stat2, description) VALUES ($1, 100, $2, $3, $4, $5) RETURNING id",
+      [ab.name, ab.speed, ab.stat1, ab.stat2, ab.desc]
+    );
+    abilityIds.push(r.rows[0].id);
+    abilityStatMap.push({ id: r.rows[0].id, stat1: ab.stat1, stat2: ab.stat2 });
+  }
+  console.log(`Seeded ${abilityIds.length} abilities`);
+
+  console.log("Seeding 100 creature species...");
+  for (let i = 1; i <= 100; i++) {
+    const name = `Specimen-${String(i).padStart(3, "0")}`;
+    const stats = {};
+    for (const stat of STAT_NAMES) {
+      stats[stat] = 10 + Math.floor(Math.random() * 81);
+    }
+    const speed = 10 + Math.floor(Math.random() * 81);
+    const variance = 5 + Math.floor(Math.random() * 11);
+
+    const r = await pool.query(
+      `INSERT INTO creature_species (name, base_hp, base_thermal, base_density, base_luminosity, base_voltage, base_stability, base_magnetism, base_speed, stat_variance)
+       VALUES ($1, 500, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [name, stats.thermal, stats.density, stats.luminosity, stats.voltage, stats.stability, stats.magnetism, speed, variance]
+    );
+    const speciesId = r.rows[0].id;
+
+    const dominant1 = STAT_NAMES[Math.floor(Math.random() * 6)];
+    const dominant2 = STAT_NAMES[Math.floor(Math.random() * 6)];
+
+    const compatibleAbilities = abilityStatMap.filter(
+      (a) => a.stat1 === dominant1 || a.stat1 === dominant2 || a.stat2 === dominant1 || a.stat2 === dominant2
+    );
+
+    const shuffled = [...compatibleAbilities].sort(() => Math.random() - 0.5);
+    const generalPool = abilityStatMap.filter(a => !shuffled.includes(a)).sort(() => Math.random() - 0.5);
+    const selected = [...shuffled.slice(0, 5), ...generalPool.slice(0, 3)].slice(0, 8);
+
+    if (selected.length < 4) {
+      const remaining = abilityStatMap.filter(a => !selected.find(s => s.id === a.id)).sort(() => Math.random() - 0.5);
+      while (selected.length < 4 && remaining.length > 0) {
+        selected.push(remaining.shift());
+      }
+    }
+
+    for (const ab of selected) {
+      await pool.query(
+        "INSERT INTO species_abilities (species_id, ability_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        [speciesId, ab.id]
+      );
+    }
+  }
+  console.log("Seeded 100 creature species with abilities");
+
+  console.log("Seed complete!");
+  process.exit(0);
+}
+
+seed().catch((err) => {
+  console.error("Seed failed:", err);
+  process.exit(1);
+});
