@@ -1,6 +1,6 @@
 const { pool } = require("./db");
 
-const BOT_WAIT_MS = 120000;
+const BOT_WAIT_MS = 60000;
 
 class MatchmakingManager {
   constructor(battleManager) {

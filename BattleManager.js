@@ -485,32 +485,15 @@ class BattleManager {
   }
 
   botDecision(battle) {
-    const botParty = battle.player2.party;
-    const botCreature = botParty[battle.player2.activeIndex];
-    const opponentCreature = battle.player1.party[battle.player1.activeIndex];
-
-    if (botCreature.currentHp <= botCreature.maxHp * 0.2 && Math.random() < 0.3) {
-      let bestIdx = -1;
-      let bestScore = -1;
-      for (let i = 0; i < botParty.length; i++) {
-        if (i === battle.player2.activeIndex || botParty[i].currentHp <= 0) continue;
-        const score = botParty[i].currentHp;
-        if (score > bestScore) { bestScore = score; bestIdx = i; }
-      }
-      if (bestIdx !== -1) {
-        return { action: "swap", creatureIndex: bestIdx };
+    const botCreature = battle.player2.party[battle.player2.activeIndex];
+    const validSlots = [];
+    if (botCreature && botCreature.abilities) {
+      for (let i = 0; i < botCreature.abilities.length; i++) {
+        if (botCreature.abilities[i] && botCreature.abilities[i].abilityId) validSlots.push(i);
       }
     }
-
-    let bestSlot = 0;
-    let bestDmg = 0;
-    for (let s = 0; s < botCreature.abilities.length; s++) {
-      const ab = botCreature.abilities[s];
-      if (!ab || !ab.abilityId) continue;
-      const dmg = calcDamage(botCreature, ab, opponentCreature);
-      if (dmg > bestDmg) { bestDmg = dmg; bestSlot = s; }
-    }
-    return { action: "ability", abilitySlot: bestSlot };
+    if (validSlots.length === 0) return { action: "ability", abilitySlot: 0 };
+    return { action: "ability", abilitySlot: validSlots[Math.floor(Math.random() * validSlots.length)] };
   }
 }
 
