@@ -43,14 +43,20 @@ class EncounterManager {
 
       player.encounterTimer -= deltaSeconds;
       if (player.encounterTimer <= 0) {
-        this.triggerEncounter(player, questManager);
+        this.triggerEncounter(player, questManager).catch((err) => {
+          console.error("Encounter error:", err.message);
+        });
         player.encounterTimer = this.randomTimer();
       }
     }
   }
 
   async triggerEncounter(player, questManager) {
-    if (this.speciesList.length === 0) return;
+    if (this.speciesList.length === 0) {
+      console.error("No species loaded! Cannot trigger encounter.");
+      return;
+    }
+    console.log(`Triggering encounter for ${player.name} (${player.userId})`);
 
     const species = this.speciesList[Math.floor(Math.random() * this.speciesList.length)];
     const variance = species.stat_variance;

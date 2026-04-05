@@ -220,8 +220,12 @@ function handleSwitchWorld(player, msg) {
 }
 
 function handleGrassStatus(player, msg) {
-  if (!player.authenticated || player.worldId === null) return;
+  if (!player.authenticated || player.worldId === null) {
+    console.log(`[grassStatus] Rejected: authenticated=${player.authenticated}, worldId=${player.worldId}`);
+    return;
+  }
   player.isInGrass = !!msg.inGrass;
+  console.log(`[grassStatus] ${player.name} inGrass=${player.isInGrass}, timer=${player.encounterTimer?.toFixed(1)}s`);
 }
 
 async function handleGetParty(player) {
