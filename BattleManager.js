@@ -2,6 +2,7 @@ const { pool } = require("./db");
 const InventoryManager = require("./InventoryManager");
 
 const TURN_TIMEOUT_MS = 40000;
+const FORCE_SWAP_TIMEOUT_MS = 30000;
 const ELO_K = 32;
 const ELO_DEFAULT = 1500;
 
@@ -50,6 +51,7 @@ class BattleManager {
       pendingActions: { p1: null, p2: null },
       turnTimer: null,
       turnDuration: TURN_TIMEOUT_MS / 1000,
+      forceSwapSide: null,
     };
 
     this.battles.set(battleId, battle);
@@ -105,6 +107,18 @@ class BattleManager {
     }, TURN_TIMEOUT_MS);
   }
 
+  startForceSwapTimer(battle) {
+    if (battle.turnTimer) clearTimeout(battle.turnTimer);
+    battle.turnTimer = setTimeout(() => {
+      if (battle.phase !== "forceSwapping") return;
+      const side = battle.forceSwapSide === "p1" ? battle.player1 : battle.player2;
+      const next = findNextAlive(side.party, side.activeIndex);
+      if (next !== -1) {
+        this.completeForceSwap(battle, battle.forceSwapSide, next);
+      }
+    }, FORCE_SWAP_TIMEOUT_MS);
+  }
+
   randomAbility(side) {
     const creature = side.party[side.activeIndex];
     if (!creature || !creature.abilities) return { action: "ability", abilitySlot: 0 };
@@ -118,7 +132,24 @@ class BattleManager {
 
   submitAction(battleId, userId, msg) {
     const battle = this.battles.get(battleId);
-    if (!battle || battle.phase !== "choosing") return;
+    if (!battle) return;
+
+    if (battle.phase === "forceSwapping") {
+      if (msg.action !== "swap" && msg.action !== "forceSwap") return;
+      const expectedSide = battle.forceSwapSide;
+      const isP1 = userId === battle.player1.userId;
+      if ((expectedSide === "p1" && !isP1) || (expectedSide === "p2" && isP1)) return;
+
+      const creatureIndex = Math.min(4, Math.max(0, Number(msg.creatureIndex) || 0));
+      const side = isP1 ? battle.player1 : battle.player2;
+      if (creatureIndex === side.activeIndex) return;
+      if (side.party[creatureIndex].currentHp <= 0) return;
+
+      this.completeForceSwap(battle, expectedSide, creatureIndex);
+      return;
+    }
+
+    if (battle.phase !== "choosing") return;
 
     const action = {
       action: msg.action === "swap" ? "swap" : "ability",
@@ -145,6 +176,49 @@ class BattleManager {
     if (battle.pendingActions.p1 && battle.pendingActions.p2) {
       this.resolveTurn(battle);
     }
+  }
+
+  completeForceSwap(battle, side, creatureIndex) {
+    if (battle.turnTimer) clearTimeout(battle.turnTimer);
+
+    const sideObj = side === "p1" ? battle.player1 : battle.player2;
+    sideObj.activeIndex = creatureIndex;
+    battle.forceSwapSide = null;
+
+    const swapMsg = {
+      type: "forceSwapComplete",
+      side,
+      creatureIndex,
+      p1Active: {
+        index: battle.player1.activeIndex,
+        creature: null,
+      },
+      p2Active: {
+        index: battle.player2.activeIndex,
+        creature: null,
+      },
+    };
+
+    battle.player1.ref.send({
+      ...swapMsg,
+      p1Active: { index: battle.player1.activeIndex, creature: battle.player1.party[battle.player1.activeIndex] },
+      p2Active: { index: battle.player2.activeIndex, creature: sanitizeOpponent(battle.player2.party[battle.player2.activeIndex]) },
+      yourParty: battle.player1.party,
+    });
+
+    if (!battle.player2.isBot && battle.player2.ref) {
+      battle.player2.ref.send({
+        ...swapMsg,
+        p1Active: { index: battle.player1.activeIndex, creature: sanitizeOpponent(battle.player1.party[battle.player1.activeIndex]) },
+        p2Active: { index: battle.player2.activeIndex, creature: battle.player2.party[battle.player2.activeIndex] },
+        yourParty: battle.player2.party,
+      });
+    }
+
+    battle.turn++;
+    battle.phase = "choosing";
+    battle.pendingActions = { p1: null, p2: null };
+    this.startTurnTimer(battle);
   }
 
   resolveTurn(battle) {
@@ -212,8 +286,7 @@ class BattleManager {
         if (nextAlive === -1) {
           events.push({ side: second, event: "defeated" });
         } else {
-          sides[second].activeIndex = nextAlive;
-          events.push({ side: second, event: "forceSwap", creatureIndex: nextAlive });
+          events.push({ side: second, event: "needsSwap" });
         }
       } else {
         const secondResult = applyDamage(
@@ -230,8 +303,7 @@ class BattleManager {
           if (nextAlive === -1) {
             events.push({ side: first, event: "defeated" });
           } else {
-            sides[first].activeIndex = nextAlive;
-            events.push({ side: first, event: "forceSwap", creatureIndex: nextAlive });
+            events.push({ side: first, event: "needsSwap" });
           }
         }
       }
@@ -245,7 +317,7 @@ class BattleManager {
           events.push({ side: "p2", event: "faint", creatureIndex: battle.player2.activeIndex });
           const next = findNextAlive(battle.player2.party, battle.player2.activeIndex);
           if (next === -1) events.push({ side: "p2", event: "defeated" });
-          else { battle.player2.activeIndex = next; events.push({ side: "p2", event: "forceSwap", creatureIndex: next }); }
+          else events.push({ side: "p2", event: "needsSwap" });
         }
       }
     } else if (p2Action.action === "ability") {
@@ -258,13 +330,15 @@ class BattleManager {
           events.push({ side: "p1", event: "faint", creatureIndex: battle.player1.activeIndex });
           const next = findNextAlive(battle.player1.party, battle.player1.activeIndex);
           if (next === -1) events.push({ side: "p1", event: "defeated" });
-          else { battle.player1.activeIndex = next; events.push({ side: "p1", event: "forceSwap", creatureIndex: next }); }
+          else events.push({ side: "p1", event: "needsSwap" });
         }
       }
     }
 
     const p1Defeated = events.some(e => e.side === "p1" && e.event === "defeated");
     const p2Defeated = events.some(e => e.side === "p2" && e.event === "defeated");
+    const p1NeedsSwap = events.some(e => e.side === "p1" && e.event === "needsSwap");
+    const p2NeedsSwap = events.some(e => e.side === "p2" && e.event === "needsSwap");
 
     const turnResult = {
       type: "battleTurnResult",
@@ -304,6 +378,34 @@ class BattleManager {
       return;
     }
 
+    if (p1NeedsSwap || p2NeedsSwap) {
+      const swapSide = p1NeedsSwap ? "p1" : "p2";
+      battle.phase = "forceSwapping";
+      battle.forceSwapSide = swapSide;
+
+      const swapperSide = swapSide === "p1" ? battle.player1 : battle.player2;
+
+      if (swapperSide.isBot) {
+        const next = findNextAlive(swapperSide.party, swapperSide.activeIndex);
+        if (next !== -1) {
+          setTimeout(() => this.completeForceSwap(battle, swapSide, next), 500);
+        }
+      } else {
+        swapperSide.ref.send({
+          type: "forceSwapRequired",
+          party: swapperSide.party,
+        });
+
+        const otherSide = swapSide === "p1" ? battle.player2 : battle.player1;
+        if (!otherSide.isBot && otherSide.ref) {
+          otherSide.ref.send({ type: "waitingForSwap" });
+        }
+
+        this.startForceSwapTimer(battle);
+      }
+      return;
+    }
+
     battle.turn++;
     battle.phase = "choosing";
     battle.pendingActions = { p1: null, p2: null };
@@ -322,9 +424,8 @@ class BattleManager {
         const p2Elo = await getPlayerElo(battle.player2.userId);
 
         if (winner === "draw") {
-          const e1 = calcEloChange(p1Elo, p2Elo, 0.5);
-          const e2 = calcEloChange(p2Elo, p1Elo, 0.5);
-          p1EloChange = e1; p2EloChange = e2;
+          p1EloChange = calcEloChange(p1Elo, p2Elo, 0.5);
+          p2EloChange = calcEloChange(p2Elo, p1Elo, 0.5);
         } else if (winner === "p1") {
           p1EloChange = calcEloChange(p1Elo, p2Elo, 1);
           p2EloChange = calcEloChange(p2Elo, p1Elo, 0);
@@ -343,30 +444,27 @@ class BattleManager {
       }
     }
 
-    const p1Msg = {
+    battle.player1.ref.send({
       type: "battleEnd",
       winner: winner || "draw",
       opponentName: battle.player2.name,
       eloChange: p1EloChange,
       newElo: p1NewElo,
       isBot: battle.player2.isBot,
-    };
-    const p2Msg = {
-      type: "battleEnd",
-      winner: winner === "p1" ? "p2" : winner === "p2" ? "p1" : "draw",
-      opponentName: battle.player1.name,
-      eloChange: p2EloChange,
-      newElo: p2NewElo,
-      isBot: false,
-    };
-
-    battle.player1.ref.send(p1Msg);
+    });
     battle.player1.ref.inBattle = false;
     battle.player1.ref.battleId = null;
     this.playerBattleMap.delete(battle.player1.userId);
 
     if (!battle.player2.isBot && battle.player2.ref) {
-      battle.player2.ref.send(p2Msg);
+      battle.player2.ref.send({
+        type: "battleEnd",
+        winner: winner === "p1" ? "p2" : winner === "p2" ? "p1" : "draw",
+        opponentName: battle.player1.name,
+        eloChange: p2EloChange,
+        newElo: p2NewElo,
+        isBot: false,
+      });
       battle.player2.ref.inBattle = false;
       battle.player2.ref.battleId = null;
       this.playerBattleMap.delete(battle.player2.userId);
@@ -426,14 +524,12 @@ function calcInitiative(creatureSpeed, abilitySpeed) {
 function calcDamage(attacker, ability, defender) {
   const stats = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
   let totalDist = 0;
-
   if (ability.stat1 && stats.includes(ability.stat1)) {
     totalDist += Math.abs((attacker[ability.stat1] || 50) - (defender[ability.stat1] || 50)) / 100;
   }
   if (ability.stat2 && stats.includes(ability.stat2)) {
     totalDist += Math.abs((attacker[ability.stat2] || 50) - (defender[ability.stat2] || 50)) / 100;
   }
-
   const multiplier = Math.max(0.1, Math.min(4.0, 2.0 * totalDist));
   return Math.round((ability.baseDamage || 100) * multiplier);
 }
