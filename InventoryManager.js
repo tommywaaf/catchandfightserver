@@ -236,7 +236,7 @@ class InventoryManager {
   static async getLowestStatCreature(userId) {
     const result = await pool.query(
       `SELECT pc.*, cs.name AS species_name, cs.base_hp,
-        (pc.thermal + pc.density + pc.luminosity + pc.voltage + pc.stability + pc.magnetism + pc.speed) AS total_stats,
+        (ABS(pc.thermal - 50) + ABS(pc.density - 50) + ABS(pc.luminosity - 50) + ABS(pc.voltage - 50) + ABS(pc.stability - 50) + ABS(pc.magnetism - 50) + pc.speed) AS polarity_score,
         json_agg(json_build_object('abilityId', a.id, 'name', a.name, 'baseDamage', a.base_damage,
           'abilitySpeed', a.ability_speed, 'stat1', a.stat1, 'stat2', a.stat2, 'slot', ca.slot)
           ORDER BY ca.slot) AS abilities
@@ -246,14 +246,14 @@ class InventoryManager {
        LEFT JOIN abilities a ON a.id = ca.ability_id
        WHERE pc.user_id = $1
        GROUP BY pc.id, cs.name, cs.base_hp
-       ORDER BY total_stats ASC
+       ORDER BY polarity_score ASC
        LIMIT 1`,
       [userId]
     );
     if (result.rows.length === 0) return null;
     const row = result.rows[0];
     const c = formatCreature(row);
-    c.totalStats = parseInt(row.total_stats);
+    c.polarityScore = parseInt(row.polarity_score);
     return c;
   }
 

@@ -82,7 +82,7 @@ class EncounterManager {
 
     if (isFull) {
       const lowest = await InventoryManager.getLowestStatCreature(player.userId);
-      const newTotal = stats.thermal + stats.density + stats.luminosity + stats.voltage + stats.stability + stats.magnetism + stats.speed;
+      const newPolarity = Math.abs(stats.thermal - 50) + Math.abs(stats.density - 50) + Math.abs(stats.luminosity - 50) + Math.abs(stats.voltage - 50) + Math.abs(stats.stability - 50) + Math.abs(stats.magnetism - 50) + stats.speed;
 
       player.send({
         type: "storageFullOffer",
@@ -93,7 +93,7 @@ class EncounterManager {
           currentHp: stats.hp,
           maxHp: stats.hp,
           abilities: selectedAbilities,
-          totalStats: newTotal,
+          polarityScore: newPolarity,
         },
         lowestCreature: lowest,
       });
