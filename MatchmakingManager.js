@@ -27,17 +27,25 @@ class MatchmakingManager {
       opponent.player.inMatchmaking = false;
       player.inMatchmaking = false;
 
+      console.log(`Match found: ${opponent.player.name} vs ${player.name}`);
+
       const qm = this.questManager;
       this.battleManager.createBattle(opponent.player, player, false).then((battle) => {
         if (!battle) {
+          console.error("Battle creation returned null");
           opponent.player.send({ type: "error", message: "Battle creation failed" });
           player.send({ type: "error", message: "Battle creation failed" });
           return;
         }
+        console.log(`Battle ${battle.id} started: ${opponent.player.name} vs ${player.name}`);
         if (qm) {
           opponent.player._questCallback = () => qm.incrementQuest(opponent.player, "win_pvp_1", 1);
           player._questCallback = () => qm.incrementQuest(player, "win_pvp_1", 1);
         }
+      }).catch((err) => {
+        console.error("Battle creation error:", err.message);
+        opponent.player.send({ type: "error", message: "Battle creation failed" });
+        player.send({ type: "error", message: "Battle creation failed" });
       });
       return;
     }
@@ -64,18 +72,32 @@ class MatchmakingManager {
       if (now - entry.joinedAt >= BOT_WAIT_MS) {
         toRemove.push(i);
         entry.player.inMatchmaking = false;
-        const botParty = await this.generateBotParty();
 
-        const botPlayer = {
-          userId: "bot",
-          party: botParty,
-          inBattle: false,
-          battleId: null,
-        };
+        try {
+          console.log(`Bot timeout for ${entry.player.name}, generating bot...`);
+          const botParty = await this.generateBotParty();
 
-        const battle = await this.battleManager.createBattle(entry.player, botPlayer, true);
-        if (battle && this.questManager) {
-          entry.player._questCallback = () => this.questManager.incrementQuest(entry.player, "win_pvp_1", 1);
+          const botPlayer = {
+            userId: "bot",
+            name: "Bot",
+            party: botParty,
+            inBattle: false,
+            battleId: null,
+          };
+
+          const battle = await this.battleManager.createBattle(entry.player, botPlayer, true);
+          if (battle) {
+            console.log(`Bot battle ${battle.id} started for ${entry.player.name}`);
+            if (this.questManager) {
+              entry.player._questCallback = () => this.questManager.incrementQuest(entry.player, "win_pvp_1", 1);
+            }
+          } else {
+            console.error("Bot battle creation returned null");
+            entry.player.send({ type: "error", message: "Bot battle failed" });
+          }
+        } catch (err) {
+          console.error("Bot battle error:", err.message);
+          entry.player.send({ type: "error", message: "Bot battle failed" });
         }
       }
     }
