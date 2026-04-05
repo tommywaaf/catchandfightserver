@@ -1,7 +1,7 @@
 const WebSocket = require("ws");
 const Player = require("./Player");
 const WorldManager = require("./WorldManager");
-const { initDB } = require("./db");
+const { initDB, pool } = require("./db");
 const authManager = require("./AuthManager");
 const InventoryManager = require("./InventoryManager");
 const EncounterManager = require("./EncounterManager");
@@ -124,6 +124,9 @@ function handleMessage(player, msg) {
       break;
     case "findBattle":
       handleFindBattle(player);
+      break;
+    case "getLeaderboard":
+      handleGetLeaderboard(player);
       break;
     case "cancelMatchmaking":
       handleCancelMatchmaking(player);
@@ -290,6 +293,32 @@ async function handleReleaseCreature(player, msg) {
     player.send({ type: "creatureReleased", creatureId: Number(msg.creatureId), party: player.party });
   } else {
     player.send({ type: "error", message: result.error });
+  }
+}
+
+async function handleGetLeaderboard(player) {
+  if (!player.authenticated) return;
+  try {
+    const top100 = await pool.query(
+      "SELECT id, username, elo FROM users ORDER BY elo DESC LIMIT 100"
+    );
+    const rankResult = await pool.query(
+      "SELECT COUNT(*) + 1 AS rank FROM users WHERE elo > (SELECT elo FROM users WHERE id = $1)",
+      [player.userId]
+    );
+    const myEloResult = await pool.query("SELECT elo FROM users WHERE id = $1", [player.userId]);
+    const myRank = parseInt(rankResult.rows[0].rank);
+    const myElo = myEloResult.rows.length > 0 ? myEloResult.rows[0].elo : 1500;
+
+    player.send({
+      type: "leaderboardData",
+      entries: top100.rows.map((r, i) => ({ rank: i + 1, username: r.username, elo: r.elo, isYou: r.id === player.userId })),
+      myRank,
+      myElo,
+      myUsername: player.name,
+    });
+  } catch (err) {
+    console.error("Leaderboard error:", err.message);
   }
 }
 
