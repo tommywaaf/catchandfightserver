@@ -197,32 +197,22 @@ class BattleManager {
     sideObj.activeIndex = creatureIndex;
     battle.forceSwapSide = null;
 
-    const swapMsg = {
+    battle.player1.ref.send({
       type: "forceSwapComplete",
       side,
       creatureIndex,
-      p1Active: {
-        index: battle.player1.activeIndex,
-        creature: null,
-      },
-      p2Active: {
-        index: battle.player2.activeIndex,
-        creature: null,
-      },
-    };
-
-    battle.player1.ref.send({
-      ...swapMsg,
-      p1Active: { index: battle.player1.activeIndex, creature: battle.player1.party[battle.player1.activeIndex] },
-      p2Active: { index: battle.player2.activeIndex, creature: sanitizeOpponent(battle.player2.party[battle.player2.activeIndex]) },
+      yourActive: { index: battle.player1.activeIndex, creature: battle.player1.party[battle.player1.activeIndex] },
+      opponentActive: { index: battle.player2.activeIndex, creature: sanitizeOpponent(battle.player2.party[battle.player2.activeIndex]) },
       yourParty: battle.player1.party,
     });
 
     if (!battle.player2.isBot && battle.player2.ref) {
       battle.player2.ref.send({
-        ...swapMsg,
-        p1Active: { index: battle.player1.activeIndex, creature: sanitizeOpponent(battle.player1.party[battle.player1.activeIndex]) },
-        p2Active: { index: battle.player2.activeIndex, creature: battle.player2.party[battle.player2.activeIndex] },
+        type: "forceSwapComplete",
+        side: side === "p1" ? "p2" : "p1",
+        creatureIndex,
+        yourActive: { index: battle.player2.activeIndex, creature: battle.player2.party[battle.player2.activeIndex] },
+        opponentActive: { index: battle.player1.activeIndex, creature: sanitizeOpponent(battle.player1.party[battle.player1.activeIndex]) },
         yourParty: battle.player2.party,
       });
     }
@@ -352,31 +342,26 @@ class BattleManager {
     const p1NeedsSwap = events.some(e => e.side === "p1" && e.event === "needsSwap");
     const p2NeedsSwap = events.some(e => e.side === "p2" && e.event === "needsSwap");
 
-    const turnResult = {
+    battle.player1.ref.send({
       type: "battleTurnResult",
       turn: battle.turn,
       events,
-      p1Active: {
-        index: battle.player1.activeIndex,
-        creature: battle.player1.party[battle.player1.activeIndex],
-      },
-      p2Active: {
-        index: battle.player2.activeIndex,
-        creature: sanitizeOpponent(battle.player2.party[battle.player2.activeIndex]),
-      },
-    };
-
-    battle.player1.ref.send({
-      ...turnResult,
-      p2Active: { index: battle.player2.activeIndex, creature: sanitizeOpponent(battle.player2.party[battle.player2.activeIndex]) },
+      yourActive: { index: battle.player1.activeIndex, creature: battle.player1.party[battle.player1.activeIndex] },
+      opponentActive: { index: battle.player2.activeIndex, creature: sanitizeOpponent(battle.player2.party[battle.player2.activeIndex]) },
       yourParty: battle.player1.party,
     });
 
     if (!battle.player2.isBot && battle.player2.ref) {
+      const p2Events = events.map(e => ({
+        ...e,
+        side: e.side === "p1" ? "p2" : e.side === "p2" ? "p1" : e.side,
+      }));
       battle.player2.ref.send({
-        ...turnResult,
-        p1Active: { index: battle.player1.activeIndex, creature: sanitizeOpponent(battle.player1.party[battle.player1.activeIndex]) },
-        p2Active: { index: battle.player2.activeIndex, creature: battle.player2.party[battle.player2.activeIndex] },
+        type: "battleTurnResult",
+        turn: battle.turn,
+        events: p2Events,
+        yourActive: { index: battle.player2.activeIndex, creature: battle.player2.party[battle.player2.activeIndex] },
+        opponentActive: { index: battle.player1.activeIndex, creature: sanitizeOpponent(battle.player1.party[battle.player1.activeIndex]) },
         yourParty: battle.player2.party,
       });
     }
