@@ -130,8 +130,54 @@ function canonicalQuestId(rawQuestId) {
   if (QUEST_IDS.has(raw)) return raw;
   const mapped = LEGACY_QUEST_ID_MAP[raw];
   if (mapped && QUEST_IDS.has(mapped)) return mapped;
+  const huntMatch = raw.match(/^hunt_(.+)$/i);
+  if (huntMatch) {
+    const species = huntMatch[1].toLowerCase();
+    if (species === "brumble") return "mix_brumble";
+    return "mix_catch_10";
+  }
   const prefixed = raw.startsWith("mix_") ? raw : `mix_${raw}`;
   return QUEST_IDS.has(prefixed) ? prefixed : raw;
+}
+
+function toTitleCaseSlug(raw) {
+  return String(raw || "")
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function fallbackQuestDisplay(questId, progress) {
+  const raw = String(questId || "").trim();
+  const hunt = raw.match(/^hunt_(.+)$/i);
+  if (hunt) {
+    const species = toTitleCaseSlug(hunt[1]);
+    return {
+      description: `Catch a ${species} in the grass`,
+      target: 1,
+    };
+  }
+  const catchMatch = raw.match(/^catch_(\d+)$/i);
+  if (catchMatch) {
+    const target = Math.max(1, Number(catchMatch[1]) || 1);
+    return {
+      description: `Catch ${target} creatures in the grass`,
+      target,
+    };
+  }
+  const battleMatch = raw.match(/^battle_(\d+)$/i);
+  if (battleMatch) {
+    const target = Math.max(1, Number(battleMatch[1]) || 1);
+    return {
+      description: `Win ${target} battle${target === 1 ? "" : "s"}`,
+      target,
+    };
+  }
+  return {
+    description: raw || "Quest objective",
+    target: Math.max(1, Number(progress) || 0),
+  };
 }
 
 /** Primary stats at pole cap: right → +50, left → -50 (matches statClamp primary limits). */
@@ -181,27 +227,29 @@ class QuestManager {
     return QUESTS.find((q) => q.id === canonicalQuestId(questId));
   }
 
-  async normalizeQuestRows(userId, rows) {
-    const migrated = [];
-    for (const row of rows) {
-      const canonicalId = canonicalQuestId(row.quest_id);
-      migrated.push({ ...row, quest_id: canonicalId });
-      if (canonicalId === row.quest_id) continue;
+  async resetUserQuestProgress(userId) {
+    await pool.query("DELETE FROM quest_progress WHERE user_id = $1", [userId]);
+    await pool.query(
+      "INSERT INTO quest_progress (user_id, quest_id, progress, completed) VALUES ($1, $2, 0, FALSE) ON CONFLICT DO NOTHING",
+      [userId, "mix_catch_10"]
+    );
+    return [{ quest_id: "mix_catch_10", progress: 0, completed: false }];
+  }
 
-      await pool.query(
-        `INSERT INTO quest_progress (user_id, quest_id, progress, completed)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id, quest_id) DO UPDATE
-         SET progress = GREATEST(quest_progress.progress, EXCLUDED.progress),
-             completed = (quest_progress.completed OR EXCLUDED.completed)`,
-        [userId, canonicalId, row.progress, row.completed]
-      );
-      await pool.query(
-        "DELETE FROM quest_progress WHERE user_id = $1 AND quest_id = $2",
-        [userId, row.quest_id]
-      );
+  async normalizeQuestRows(userId, rows) {
+    if (!rows || rows.length === 0) return rows || [];
+
+    const hasLegacyQuestId = rows.some((row) => {
+      const raw = String(row.quest_id || "").trim();
+      return !QUEST_IDS.has(raw);
+    });
+
+    if (hasLegacyQuestId) {
+      // Product decision: any legacy/unknown quest ID means a full quest restart.
+      return this.resetUserQuestProgress(userId);
     }
-    return migrated;
+
+    return rows;
   }
 
   async getActiveQuestId(userId) {
@@ -227,11 +275,12 @@ class QuestManager {
 
     const quests = rows.map((row) => {
       const def = this.getQuestDef(row.quest_id);
+      const fallback = def ? null : fallbackQuestDisplay(row.quest_id, row.progress);
       return {
         questId: row.quest_id,
-        description: def ? def.description : row.quest_id,
+        description: def ? def.description : fallback.description,
         progress: row.progress,
-        target: def ? def.target : 0,
+        target: def ? def.target : fallback.target,
         completed: row.completed,
       };
     });
