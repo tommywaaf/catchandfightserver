@@ -170,6 +170,15 @@ async function initDB() {
       await client.query("INSERT INTO schema_migrations (id) VALUES ('rare_grass_twinkl_cleanup_v1')");
     }
 
+    const qClear = await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", ["clear_all_quest_progress_v1"]);
+    if (qClear.rows.length === 0) {
+      await client.query("DELETE FROM quest_progress");
+      await client.query("INSERT INTO schema_migrations (id) VALUES ('clear_all_quest_progress_v1')");
+      console.log(
+        "Applied clear_all_quest_progress_v1: everyone starts fresh; first quest (mix_catch_10) is created on next login/join"
+      );
+    }
+
     console.log("Database tables initialized");
   } finally {
     client.release();

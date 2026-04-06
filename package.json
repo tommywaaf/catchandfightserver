@@ -4,7 +4,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "seed": "node seed.js"
+    "seed": "node seed.js",
+    "clear-quests": "node clearQuestProgress.js",
+    "clear-quests-grass": "node clearQuestProgress.js --grass"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
