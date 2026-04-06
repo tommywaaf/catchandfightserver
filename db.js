@@ -31,7 +31,13 @@ async function initDB() {
         base_stability INTEGER NOT NULL,
         base_magnetism INTEGER NOT NULL,
         base_speed INTEGER NOT NULL,
-        stat_variance INTEGER NOT NULL DEFAULT 10
+        stat_variance INTEGER NOT NULL DEFAULT 10,
+        primary_stat1 VARCHAR(20),
+        primary_side1 VARCHAR(10),
+        primary_stat2 VARCHAR(20),
+        primary_side2 VARCHAR(10),
+        find_weight INTEGER NOT NULL DEFAULT 1,
+        grass_unlock_tier INTEGER NOT NULL DEFAULT 0
       );
 
       CREATE TABLE IF NOT EXISTS abilities (
@@ -82,10 +88,30 @@ async function initDB() {
         completed BOOLEAN NOT NULL DEFAULT FALSE,
         PRIMARY KEY (user_id, quest_id)
       );
+
+      CREATE TABLE IF NOT EXISTS user_species_discovery (
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        species_id INTEGER REFERENCES creature_species(id) ON DELETE CASCADE,
+        discovered_at TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (user_id, species_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_grass_progress (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        unlock_tier INTEGER NOT NULL DEFAULT 0
+      );
     `);
 
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS elo INTEGER NOT NULL DEFAULT 1500;
+    `);
+    await client.query(`
+      ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS primary_stat1 VARCHAR(20);
+      ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS primary_side1 VARCHAR(10);
+      ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS primary_stat2 VARCHAR(20);
+      ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS primary_side2 VARCHAR(10);
+      ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS find_weight INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS grass_unlock_tier INTEGER NOT NULL DEFAULT 0;
     `);
 
     console.log("Database tables initialized");

@@ -263,8 +263,8 @@ class BattleManager {
         if (p1Creature.speed > p2Creature.speed) { first = "p1"; second = "p2"; }
         else if (p2Creature.speed > p1Creature.speed) { first = "p2"; second = "p1"; }
         else {
-          const p1StatVal = p1Creature[p1Ability.stat1] || 50;
-          const p2StatVal = p2Creature[p2Ability.stat1] || 50;
+          const p1StatVal = p1Creature[p1Ability.stat1] || 0;
+          const p2StatVal = p2Creature[p2Ability.stat1] || 0;
           if (p1StatVal > p2StatVal) { first = "p1"; second = "p2"; }
           else if (p2StatVal > p1StatVal) { first = "p2"; second = "p1"; }
           else { first = Math.random() < 0.5 ? "p1" : "p2"; second = first === "p1" ? "p2" : "p1"; }
@@ -505,10 +505,10 @@ function calcDamage(attacker, ability, defender) {
   const stats = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
   let totalDist = 0;
   if (ability.stat1 && stats.includes(ability.stat1)) {
-    totalDist += Math.abs((attacker[ability.stat1] || 50) - (defender[ability.stat1] || 50)) / 100;
+    totalDist += Math.abs((attacker[ability.stat1] || 0) - (defender[ability.stat1] || 0)) / 100;
   }
   if (ability.stat2 && stats.includes(ability.stat2)) {
-    totalDist += Math.abs((attacker[ability.stat2] || 50) - (defender[ability.stat2] || 50)) / 100;
+    totalDist += Math.abs((attacker[ability.stat2] || 0) - (defender[ability.stat2] || 0)) / 100;
   }
   const multiplier = Math.max(0.1, Math.min(4.0, 2.0 * totalDist));
   return Math.round((ability.baseDamage || 100) * multiplier);

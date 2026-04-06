@@ -1,8 +1,14 @@
 const { pool } = require("./db");
+const InventoryManager = require("./InventoryManager");
 
 const QUESTS = [
   { id: "catch_10", description: "Catch 10 escaped lab creatures", target: 10, next: "win_pvp_1" },
-  { id: "win_pvp_1", description: "Win 1 battle against another player", target: 1, next: null },
+  { id: "win_pvp_1", description: "Win 1 battle against another player", target: 1, next: "hunt_flaro", rewardUnlockTier: 1, unlockAdded: 4 },
+  { id: "hunt_flaro", description: "Catch 1 Flaro in grass (+4 hidden species unlocked)", target: 1, speciesName: "Flaro", next: "hunt_drifin", rewardUnlockTier: 2, unlockAdded: 4 },
+  { id: "hunt_drifin", description: "Catch 1 Drifin in grass (+4 hidden species unlocked)", target: 1, speciesName: "Drifin", next: "hunt_ripple", rewardUnlockTier: 3, unlockAdded: 4 },
+  { id: "hunt_ripple", description: "Catch 1 Ripple in grass (+4 hidden species unlocked)", target: 1, speciesName: "Ripple", next: "hunt_charby", rewardUnlockTier: 4, unlockAdded: 4 },
+  { id: "hunt_charby", description: "Catch 1 Charby in grass (+3 hidden species unlocked)", target: 1, speciesName: "Charby", next: "hunt_twinkl", rewardUnlockTier: 5, unlockAdded: 3 },
+  { id: "hunt_twinkl", description: "Catch 1 Twinkl in grass", target: 1, speciesName: "Twinkl", next: null },
 ];
 
 class QuestManager {
@@ -74,9 +80,46 @@ class QuestManager {
       );
     }
 
+    if (completed && typeof def.rewardUnlockTier === "number") {
+      await InventoryManager.setGrassUnlockTier(player.userId, def.rewardUnlockTier);
+      player.grassUnlockTier = await InventoryManager.getGrassUnlockTier(player.userId);
+      player.send({
+        type: "grassPoolUnlocked",
+        unlockTier: player.grassUnlockTier,
+        addedCount: Number(def.unlockAdded || 0),
+      });
+    }
+
     const quests = await this.getQuests(player.userId);
     player.quests = quests;
     player.send({ type: "questUpdated", quests, justCompleted: completed ? questId : null });
+
+    if (completed) {
+      const dex = await InventoryManager.getGrassDexState(player.userId);
+      player.send({
+        type: "grassDexUpdated",
+        grassDex: dex.entries,
+        grassPoolSize: dex.grassPoolSize,
+        discoveredCount: dex.discoveredCount,
+        speciesCount: dex.speciesCount,
+        unlockTier: dex.unlockTier,
+      });
+    }
+  }
+
+  async handleCreatureCaught(player, speciesName) {
+    if (!player?.userId || !speciesName) return;
+
+    const activeResult = await pool.query(
+      "SELECT quest_id FROM quest_progress WHERE user_id = $1 AND completed = FALSE",
+      [player.userId]
+    );
+    for (const row of activeResult.rows) {
+      const def = this.getQuestDef(row.quest_id);
+      if (!def || !def.speciesName) continue;
+      if (def.speciesName.toLowerCase() !== String(speciesName).toLowerCase()) continue;
+      await this.incrementQuest(player, row.quest_id, 1);
+    }
   }
 }
 

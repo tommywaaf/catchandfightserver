@@ -3,6 +3,8 @@ const InventoryManager = require("./InventoryManager");
 
 /** No encounter progress unless the client sent a recent move while in grass (standing still = no catches) */
 const GRASS_MOVE_STALE_MS = 400;
+const ELEMENTAL_STATS = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
+const PRIMARY_FLOOR = { right: 1, left: -1 };
 
 class EncounterManager {
   constructor() {
@@ -12,7 +14,7 @@ class EncounterManager {
   }
 
   async loadSpeciesData() {
-    const speciesResult = await pool.query("SELECT * FROM creature_species");
+    const speciesResult = await pool.query("SELECT * FROM creature_species ORDER BY id ASC");
     this.speciesList = speciesResult.rows;
 
     const saResult = await pool.query("SELECT species_id, ability_id FROM species_abilities");
@@ -63,18 +65,19 @@ class EncounterManager {
     }
     console.log(`Triggering encounter for ${player.name} (${player.userId})`);
 
-    const species = this.speciesList[Math.floor(Math.random() * this.speciesList.length)];
+    const species = this.pickSpeciesForPlayer(player);
+    if (!species) return;
     const variance = species.stat_variance;
 
     const stats = {
       hp: species.base_hp,
-      thermal: clampStat(species.base_thermal + randVariance(variance)),
-      density: clampStat(species.base_density + randVariance(variance)),
-      luminosity: clampStat(species.base_luminosity + randVariance(variance)),
-      voltage: clampStat(species.base_voltage + randVariance(variance)),
-      stability: clampStat(species.base_stability + randVariance(variance)),
-      magnetism: clampStat(species.base_magnetism + randVariance(variance)),
-      speed: clampStat(species.base_speed + randVariance(variance)),
+      thermal: rollElementalStat("thermal", species, variance),
+      density: rollElementalStat("density", species, variance),
+      luminosity: rollElementalStat("luminosity", species, variance),
+      voltage: rollElementalStat("voltage", species, variance),
+      stability: rollElementalStat("stability", species, variance),
+      magnetism: rollElementalStat("magnetism", species, variance),
+      speed: clampSpeed(species.base_speed + randVariance(variance)),
     };
 
     const availableAbilities = this.speciesAbilities.get(species.id) || [];
@@ -87,13 +90,17 @@ class EncounterManager {
 
     if (isFull) {
       const lowest = await InventoryManager.getLowestStatCreature(player.userId);
-      const newPolarity = Math.abs(stats.thermal - 50) + Math.abs(stats.density - 50) + Math.abs(stats.luminosity - 50) + Math.abs(stats.voltage - 50) + Math.abs(stats.stability - 50) + Math.abs(stats.magnetism - 50) + stats.speed;
+      const newPolarity = polarityScore(stats);
 
       player.send({
         type: "storageFullOffer",
         newCreature: {
           speciesId: species.id,
           speciesName: species.name,
+          primaryStat1: species.primary_stat1,
+          primarySide1: species.primary_side1,
+          primaryStat2: species.primary_stat2,
+          primarySide2: species.primary_side2,
           ...stats,
           currentHp: stats.hp,
           maxHp: stats.hp,
@@ -102,25 +109,28 @@ class EncounterManager {
         },
         lowestCreature: lowest,
       });
-      player._pendingReplace = { speciesId: species.id, stats, abilityIds: selectedAbilities };
+      player._pendingReplace = { speciesId: species.id, speciesName: species.name, stats, abilityIds: selectedAbilities };
       return;
     }
 
     const result = await InventoryManager.addCreature(player.userId, species.id, stats, selectedAbilities);
 
     if (result.success) {
+      await InventoryManager.recordDiscovery(player.userId, species.id);
       const creature = await InventoryManager.getCreatureById(result.creatureId);
       player.send({
         type: "creatureCaught",
         creature,
         slotType: result.slotType,
       });
+      await this.pushGrassDex(player);
 
       if (result.slotType === "party") {
         player.party = await InventoryManager.getParty(player.userId);
       }
 
       await questManager.incrementQuest(player, "catch_10", 1);
+      await questManager.handleCreatureCaught(player, species.name);
     } else {
       player.send({
         type: "creatureEscaped",
@@ -128,14 +138,76 @@ class EncounterManager {
       });
     }
   }
+
+  pickSpeciesForPlayer(player) {
+    const unlockTier = Number(player.grassUnlockTier || 0);
+    let pool = this.speciesList.filter((s) => Number(s.grass_unlock_tier) <= unlockTier && Number(s.find_weight) > 0);
+    if (pool.length === 0) {
+      pool = this.speciesList.filter((s) => Number(s.grass_unlock_tier) <= 0 && Number(s.find_weight) > 0);
+    }
+    if (pool.length === 0) return null;
+
+    const totalWeight = pool.reduce((sum, s) => sum + Number(s.find_weight || 0), 0);
+    let roll = Math.random() * totalWeight;
+    for (const species of pool) {
+      roll -= Number(species.find_weight || 0);
+      if (roll <= 0) return species;
+    }
+    return pool[pool.length - 1];
+  }
+
+  async pushGrassDex(player) {
+    const dex = await InventoryManager.getGrassDexState(player.userId);
+    player.send({
+      type: "grassDexUpdated",
+      grassDex: dex.entries,
+      grassPoolSize: dex.grassPoolSize,
+      discoveredCount: dex.discoveredCount,
+      speciesCount: dex.speciesCount,
+      unlockTier: dex.unlockTier,
+    });
+  }
 }
 
-function clampStat(v) {
+function rollElementalStat(statName, species, variance) {
+  const baseKey = `base_${statName}`;
+  const rolled = Number(species[baseKey]) + randVariance(variance);
+  const isPrimary = isPrimaryStat(species, statName);
+  const primarySide = getPrimarySide(species, statName);
+  return clampElemental(rolled, isPrimary, primarySide);
+}
+
+function isPrimaryStat(species, statName) {
+  return species.primary_stat1 === statName || species.primary_stat2 === statName;
+}
+
+function getPrimarySide(species, statName) {
+  if (species.primary_stat1 === statName) return species.primary_side1;
+  if (species.primary_stat2 === statName) return species.primary_side2;
+  return null;
+}
+
+function clampElemental(v, isPrimary, primarySide) {
+  const min = isPrimary ? -50 : -30;
+  const max = isPrimary ? 50 : 30;
+  let clamped = Math.max(min, Math.min(max, Math.round(v)));
+  if (isPrimary && primarySide && PRIMARY_FLOOR[primarySide] !== undefined) {
+    const floor = PRIMARY_FLOOR[primarySide];
+    clamped = primarySide === "left" ? Math.min(clamped, floor) : Math.max(clamped, floor);
+  }
+  return clamped;
+}
+
+function clampSpeed(v) {
   return Math.max(0, Math.min(100, Math.round(v)));
 }
 
 function randVariance(v) {
   return (Math.random() * 2 - 1) * v;
+}
+
+function polarityScore(stats) {
+  return ELEMENTAL_STATS.reduce((sum, stat) => sum + Math.abs(Number(stats[stat] || 0)), 0) + Number(stats.speed || 0);
 }
 
 module.exports = EncounterManager;

@@ -1,6 +1,39 @@
 const { pool, initDB } = require("./db");
 
 const STAT_NAMES = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
+const POLARITY_FLOOR = { right: 1, left: -1 };
+
+const SPECIES_DEFS = [
+  { name: "Flaro", stat1: "thermal", stat1Side: "right", stat2: "luminosity", stat2Side: "right", weight: 14, tier: 0 },
+  { name: "Pebbo", stat1: "density", stat1Side: "right", stat2: "stability", stat2Side: "right", weight: 14, tier: 0 },
+  { name: "Glimmi", stat1: "luminosity", stat1Side: "right", stat2: null, stat2Side: null, weight: 12, tier: 0 },
+  { name: "Zappup", stat1: "voltage", stat1Side: "right", stat2: null, stat2Side: null, weight: 10, tier: 0 },
+  { name: "Mossit", stat1: "stability", stat1Side: "right", stat2: null, stat2Side: null, weight: 10, tier: 0 },
+  { name: "Brumble", stat1: "stability", stat1Side: "right", stat2: "density", stat2Side: "right", weight: 9, tier: 0 },
+  { name: "Drifin", stat1: "stability", stat1Side: "left", stat2: "luminosity", stat2Side: "left", weight: 9, tier: 0 },
+  { name: "Splashy", stat1: "stability", stat1Side: "left", stat2: null, stat2Side: null, weight: 8, tier: 0 },
+  { name: "Niblet", stat1: "density", stat1Side: "right", stat2: "luminosity", stat2Side: "right", weight: 7, tier: 0 },
+  { name: "Chilloo", stat1: "thermal", stat1Side: "left", stat2: "stability", stat2Side: "right", weight: 7, tier: 0 },
+  { name: "Muddo", stat1: "density", stat1Side: "right", stat2: null, stat2Side: null, weight: 6, tier: 1 },
+  { name: "Wickit", stat1: "thermal", stat1Side: "right", stat2: "stability", stat2Side: "right", weight: 6, tier: 1 },
+  { name: "Sparko", stat1: "voltage", stat1Side: "right", stat2: "luminosity", stat2Side: "right", weight: 5, tier: 1 },
+  { name: "Fluffet", stat1: "stability", stat1Side: "right", stat2: null, stat2Side: null, weight: 5, tier: 1 },
+  { name: "Thorny", stat1: "stability", stat1Side: "right", stat2: "density", stat2Side: "right", weight: 4, tier: 2 },
+  { name: "Ripple", stat1: "magnetism", stat1Side: "right", stat2: "stability", stat2Side: "left", weight: 4, tier: 2 },
+  { name: "Craglet", stat1: "density", stat1Side: "right", stat2: "stability", stat2Side: "right", weight: 4, tier: 2 },
+  { name: "Blinko", stat1: "luminosity", stat1Side: "right", stat2: null, stat2Side: null, weight: 3, tier: 2 },
+  { name: "Hushit", stat1: "stability", stat1Side: "left", stat2: null, stat2Side: null, weight: 3, tier: 3 },
+  { name: "Coilin", stat1: "magnetism", stat1Side: "right", stat2: "voltage", stat2Side: "right", weight: 3, tier: 3 },
+  { name: "Puffox", stat1: "stability", stat1Side: "left", stat2: "luminosity", stat2Side: "left", weight: 2, tier: 3 },
+  { name: "Daplet", stat1: "luminosity", stat1Side: "right", stat2: "stability", stat2Side: "right", weight: 2, tier: 3 },
+  { name: "Frozzle", stat1: "thermal", stat1Side: "left", stat2: "density", stat2Side: "right", weight: 2, tier: 4 },
+  { name: "Gleamo", stat1: "luminosity", stat1Side: "right", stat2: "voltage", stat2Side: "right", weight: 2, tier: 4 },
+  { name: "Skitter", stat1: "density", stat1Side: "right", stat2: "magnetism", stat2Side: "left", weight: 1, tier: 4 },
+  { name: "Charby", stat1: "thermal", stat1Side: "right", stat2: "luminosity", stat2Side: "right", weight: 1, tier: 4 },
+  { name: "Puddle", stat1: "stability", stat1Side: "left", stat2: null, stat2Side: null, weight: 1, tier: 5 },
+  { name: "Bouldi", stat1: "density", stat1Side: "right", stat2: null, stat2Side: null, weight: 1, tier: 5 },
+  { name: "Twinkl", stat1: "luminosity", stat1Side: "right", stat2: null, stat2Side: null, weight: 1, tier: 5 },
+];
 
 const ABILITIES = [
   // Single-stat abilities
@@ -40,12 +73,13 @@ const ABILITIES = [
 
 async function seed() {
   await initDB();
-
-  const existingSpecies = await pool.query("SELECT COUNT(*) FROM creature_species");
-  if (parseInt(existingSpecies.rows[0].count) > 0) {
-    console.log("Database already seeded, skipping.");
-    process.exit(0);
-  }
+  console.log("Resetting species/ability data...");
+  await pool.query("TRUNCATE TABLE species_abilities RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE TABLE creature_abilities RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE TABLE player_creatures RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE TABLE user_species_discovery RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE TABLE abilities RESTART IDENTITY CASCADE");
+  await pool.query("TRUNCATE TABLE creature_species RESTART IDENTITY CASCADE");
 
   console.log("Seeding abilities...");
   const abilityIds = [];
@@ -60,25 +94,38 @@ async function seed() {
   }
   console.log(`Seeded ${abilityIds.length} abilities`);
 
-  console.log("Seeding 100 creature species...");
-  for (let i = 1; i <= 100; i++) {
-    const name = `Specimen-${String(i).padStart(3, "0")}`;
-    const stats = {};
-    for (const stat of STAT_NAMES) {
-      stats[stat] = 10 + Math.floor(Math.random() * 81);
-    }
-    const speed = 10 + Math.floor(Math.random() * 81);
-    const variance = 5 + Math.floor(Math.random() * 11);
+  console.log("Seeding named creature species...");
+  for (const spec of SPECIES_DEFS) {
+    const stats = buildBaseStats(spec);
+    const speed = buildBaseSpeed(spec.name);
+    const variance = 6 + (hashNumber(spec.name, 7));
 
     const r = await pool.query(
-      `INSERT INTO creature_species (name, base_hp, base_thermal, base_density, base_luminosity, base_voltage, base_stability, base_magnetism, base_speed, stat_variance)
-       VALUES ($1, 500, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [name, stats.thermal, stats.density, stats.luminosity, stats.voltage, stats.stability, stats.magnetism, speed, variance]
+      `INSERT INTO creature_species
+       (name, base_hp, base_thermal, base_density, base_luminosity, base_voltage, base_stability, base_magnetism, base_speed, stat_variance, primary_stat1, primary_side1, primary_stat2, primary_side2, find_weight, grass_unlock_tier)
+       VALUES ($1, 500, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       RETURNING id`,
+      [
+        spec.name,
+        stats.thermal,
+        stats.density,
+        stats.luminosity,
+        stats.voltage,
+        stats.stability,
+        stats.magnetism,
+        speed,
+        variance,
+        spec.stat1,
+        spec.stat1Side,
+        spec.stat2,
+        spec.stat2Side,
+        spec.weight,
+        spec.tier,
+      ]
     );
     const speciesId = r.rows[0].id;
-
-    const dominant1 = STAT_NAMES[Math.floor(Math.random() * 6)];
-    const dominant2 = STAT_NAMES[Math.floor(Math.random() * 6)];
+    const dominant1 = spec.stat1;
+    const dominant2 = spec.stat2;
 
     const compatibleAbilities = abilityStatMap.filter(
       (a) => a.stat1 === dominant1 || a.stat1 === dominant2 || a.stat2 === dominant1 || a.stat2 === dominant2
@@ -102,10 +149,45 @@ async function seed() {
       );
     }
   }
-  console.log("Seeded 100 creature species with abilities");
+  console.log(`Seeded ${SPECIES_DEFS.length} creature species with abilities`);
 
   console.log("Seed complete!");
   process.exit(0);
+}
+
+function hashNumber(text, mod) {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return hash % mod;
+}
+
+function buildBaseStats(spec) {
+  const values = {};
+  for (const stat of STAT_NAMES) {
+    // Non-primary stats stay in soft center bounds; hard cap rules are applied at roll time.
+    values[stat] = -18 + hashNumber(`${spec.name}:${stat}`, 37);
+  }
+
+  applyPrimary(values, spec.stat1, spec.stat1Side, 34);
+  if (spec.stat2 && spec.stat2Side) {
+    applyPrimary(values, spec.stat2, spec.stat2Side, 30);
+  }
+
+  return values;
+}
+
+function applyPrimary(values, stat, side, magnitude) {
+  if (!stat || !side) return;
+  const sign = side === "left" ? -1 : 1;
+  const raw = sign * magnitude;
+  const floor = POLARITY_FLOOR[side];
+  values[stat] = side === "left" ? Math.min(raw, floor) : Math.max(raw, floor);
+}
+
+function buildBaseSpeed(name) {
+  return 24 + hashNumber(`speed:${name}`, 42);
 }
 
 seed().catch((err) => {

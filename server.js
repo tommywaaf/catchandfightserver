@@ -208,6 +208,8 @@ async function handleJoin(player, msg) {
 
   const quests = await questManager.getQuests(player.userId);
   player.quests = quests;
+  player.grassUnlockTier = await InventoryManager.getGrassUnlockTier(player.userId);
+  const grassDexState = await InventoryManager.getGrassDexState(player.userId);
 
   encounterManager.initPlayer(player);
 
@@ -218,6 +220,11 @@ async function handleJoin(player, msg) {
     players: world.getPlayersArray(player.id),
     party: party,
     quests: quests,
+    grassDex: grassDexState.entries,
+    grassPoolSize: grassDexState.grassPoolSize,
+    discoveredCount: grassDexState.discoveredCount,
+    speciesCount: grassDexState.speciesCount,
+    unlockTier: grassDexState.unlockTier,
   });
 
   player.send({
@@ -367,6 +374,7 @@ async function handleReplaceCreature(player, msg) {
     player.userId, lowest.id, pending.speciesId, pending.stats, pending.abilityIds
   );
   if (result.success) {
+    await InventoryManager.recordDiscovery(player.userId, pending.speciesId);
     const creature = await InventoryManager.getCreatureById(result.creatureId);
     player.party = await InventoryManager.getParty(player.userId);
     player.send({
@@ -375,7 +383,9 @@ async function handleReplaceCreature(player, msg) {
       slotType: "storage",
       replacedId: lowest.id,
     });
+    await encounterManager.pushGrassDex(player);
     await questManager.incrementQuest(player, "catch_10", 1);
+    await questManager.handleCreatureCaught(player, pending.speciesName);
   } else {
     player.send({ type: "error", message: result.error });
   }

@@ -6,7 +6,7 @@ const STORAGE_MAX = 500;
 class InventoryManager {
   static async getParty(userId) {
     const result = await pool.query(
-      `SELECT pc.*, cs.name AS species_name, cs.base_hp,
+      `SELECT pc.*, cs.name AS species_name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2,
         json_agg(json_build_object('abilityId', a.id, 'name', a.name, 'baseDamage', a.base_damage,
           'abilitySpeed', a.ability_speed, 'stat1', a.stat1, 'stat2', a.stat2, 'slot', ca.slot)
           ORDER BY ca.slot) AS abilities
@@ -15,7 +15,7 @@ class InventoryManager {
        LEFT JOIN creature_abilities ca ON ca.creature_id = pc.id
        LEFT JOIN abilities a ON a.id = ca.ability_id
        WHERE pc.user_id = $1 AND pc.slot_type = 'party'
-       GROUP BY pc.id, cs.name, cs.base_hp
+       GROUP BY pc.id, cs.name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2
        ORDER BY pc.party_position`,
       [userId]
     );
@@ -31,7 +31,7 @@ class InventoryManager {
     const total = parseInt(countResult.rows[0].count);
 
     const result = await pool.query(
-      `SELECT pc.*, cs.name AS species_name, cs.base_hp,
+      `SELECT pc.*, cs.name AS species_name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2,
         json_agg(json_build_object('abilityId', a.id, 'name', a.name, 'baseDamage', a.base_damage,
           'abilitySpeed', a.ability_speed, 'stat1', a.stat1, 'stat2', a.stat2, 'slot', ca.slot)
           ORDER BY ca.slot) AS abilities
@@ -40,7 +40,7 @@ class InventoryManager {
        LEFT JOIN creature_abilities ca ON ca.creature_id = pc.id
        LEFT JOIN abilities a ON a.id = ca.ability_id
        WHERE pc.user_id = $1 AND pc.slot_type = 'storage'
-       GROUP BY pc.id, cs.name, cs.base_hp
+       GROUP BY pc.id, cs.name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2
        ORDER BY pc.created_at DESC
        LIMIT $2 OFFSET $3`,
       [userId, pageSize, offset]
@@ -212,7 +212,7 @@ class InventoryManager {
 
   static async getCreatureById(creatureId) {
     const result = await pool.query(
-      `SELECT pc.*, cs.name AS species_name, cs.base_hp,
+      `SELECT pc.*, cs.name AS species_name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2,
         json_agg(json_build_object('abilityId', a.id, 'name', a.name, 'baseDamage', a.base_damage,
           'abilitySpeed', a.ability_speed, 'stat1', a.stat1, 'stat2', a.stat2, 'slot', ca.slot)
           ORDER BY ca.slot) AS abilities
@@ -221,7 +221,7 @@ class InventoryManager {
        LEFT JOIN creature_abilities ca ON ca.creature_id = pc.id
        LEFT JOIN abilities a ON a.id = ca.ability_id
        WHERE pc.id = $1
-       GROUP BY pc.id, cs.name, cs.base_hp`,
+       GROUP BY pc.id, cs.name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2`,
       [creatureId]
     );
     if (result.rows.length === 0) return null;
@@ -235,8 +235,8 @@ class InventoryManager {
 
   static async getLowestStatCreature(userId) {
     const result = await pool.query(
-      `SELECT pc.*, cs.name AS species_name, cs.base_hp,
-        (ABS(pc.thermal - 50) + ABS(pc.density - 50) + ABS(pc.luminosity - 50) + ABS(pc.voltage - 50) + ABS(pc.stability - 50) + ABS(pc.magnetism - 50) + pc.speed) AS polarity_score,
+      `SELECT pc.*, cs.name AS species_name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2,
+        (ABS(pc.thermal) + ABS(pc.density) + ABS(pc.luminosity) + ABS(pc.voltage) + ABS(pc.stability) + ABS(pc.magnetism) + pc.speed) AS polarity_score,
         json_agg(json_build_object('abilityId', a.id, 'name', a.name, 'baseDamage', a.base_damage,
           'abilitySpeed', a.ability_speed, 'stat1', a.stat1, 'stat2', a.stat2, 'slot', ca.slot)
           ORDER BY ca.slot) AS abilities
@@ -245,7 +245,7 @@ class InventoryManager {
        LEFT JOIN creature_abilities ca ON ca.creature_id = pc.id
        LEFT JOIN abilities a ON a.id = ca.ability_id
        WHERE pc.user_id = $1
-       GROUP BY pc.id, cs.name, cs.base_hp
+       GROUP BY pc.id, cs.name, cs.base_hp, cs.primary_stat1, cs.primary_side1, cs.primary_stat2, cs.primary_side2
        ORDER BY polarity_score ASC
        LIMIT 1`,
       [userId]
@@ -308,6 +308,95 @@ class InventoryManager {
       client.release();
     }
   }
+
+  static async ensureGrassProgress(userId) {
+    await pool.query(
+      "INSERT INTO user_grass_progress (user_id, unlock_tier) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+      [userId]
+    );
+  }
+
+  static async getGrassUnlockTier(userId) {
+    await this.ensureGrassProgress(userId);
+    const result = await pool.query("SELECT unlock_tier FROM user_grass_progress WHERE user_id = $1", [userId]);
+    return result.rows.length > 0 ? Number(result.rows[0].unlock_tier || 0) : 0;
+  }
+
+  static async setGrassUnlockTier(userId, unlockTier) {
+    await pool.query(
+      `INSERT INTO user_grass_progress (user_id, unlock_tier)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET unlock_tier = GREATEST(user_grass_progress.unlock_tier, EXCLUDED.unlock_tier)`,
+      [userId, unlockTier]
+    );
+  }
+
+  static async recordDiscovery(userId, speciesId) {
+    await pool.query(
+      "INSERT INTO user_species_discovery (user_id, species_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+      [userId, speciesId]
+    );
+  }
+
+  static async getGrassDexState(userId) {
+    const unlockTier = await this.getGrassUnlockTier(userId);
+    const speciesResult = await pool.query(
+      `SELECT id, name, primary_stat1, primary_side1, primary_stat2, primary_side2, find_weight, grass_unlock_tier
+       FROM creature_species
+       ORDER BY id ASC`
+    );
+    const discoveredResult = await pool.query(
+      "SELECT species_id FROM user_species_discovery WHERE user_id = $1",
+      [userId]
+    );
+    const discoveredSet = new Set(discoveredResult.rows.map((r) => Number(r.species_id)));
+    const unlockedSpecies = speciesResult.rows.filter((s) => Number(s.grass_unlock_tier) <= unlockTier);
+    const totalWeight = Math.max(1, unlockedSpecies.reduce((sum, s) => sum + Number(s.find_weight || 0), 0));
+
+    const entries = [];
+    for (const species of speciesResult.rows) {
+      const isDiscovered = discoveredSet.has(Number(species.id));
+      const isUnlocked = Number(species.grass_unlock_tier) <= unlockTier;
+      const findChance = isUnlocked ? ((Number(species.find_weight || 0) / totalWeight) * 100) : 0;
+      entries.push({
+        slot: entries.length + 1,
+        speciesId: Number(species.id),
+        discovered: isDiscovered,
+        name: isDiscovered ? species.name : null,
+        portraitKey: isDiscovered ? species.name : null,
+        primaryStat1: isDiscovered ? species.primary_stat1 : null,
+        primarySide1: isDiscovered ? species.primary_side1 : null,
+        primaryStat2: isDiscovered ? species.primary_stat2 : null,
+        primarySide2: isDiscovered ? species.primary_side2 : null,
+        findPercent: Number(findChance.toFixed(2)),
+        unlocked: isUnlocked,
+      });
+    }
+
+    while (entries.length < 100) {
+      entries.push({
+        slot: entries.length + 1,
+        speciesId: 0,
+        discovered: false,
+        name: null,
+        portraitKey: null,
+        primaryStat1: null,
+        primarySide1: null,
+        primaryStat2: null,
+        primarySide2: null,
+        findPercent: 0,
+        unlocked: false,
+      });
+    }
+
+    return {
+      entries,
+      discoveredCount: discoveredSet.size,
+      speciesCount: speciesResult.rows.length,
+      grassPoolSize: unlockedSpecies.length,
+      unlockTier,
+    };
+  }
 }
 
 function formatCreature(row) {
@@ -325,6 +414,10 @@ function formatCreature(row) {
     stability: row.stability,
     magnetism: row.magnetism,
     speed: row.speed,
+    primaryStat1: row.primary_stat1,
+    primarySide1: row.primary_side1,
+    primaryStat2: row.primary_stat2,
+    primarySide2: row.primary_side2,
     slotType: row.slot_type,
     partyPosition: row.party_position,
     abilities: (row.abilities || []).filter(a => a.abilityId !== null),
