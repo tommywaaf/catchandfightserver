@@ -1,5 +1,5 @@
 /**
- * One-shot: rewrite player_creatures polarity columns to match statClamp rules.
+ * One-shot: rewrite player_creatures polarity columns to match/equal statClamp rules.
  * Run from repo root: node scripts/persistPolarityClamps.js
  */
 const { pool } = require("../db");
