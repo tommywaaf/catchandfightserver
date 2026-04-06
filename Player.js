@@ -19,6 +19,8 @@ class Player {
     this.quests = [];
     this.encounterTimer = 0;
     this.isInGrass = false;
+    /** Updated when a move packet arrives while in grass; encounter timer only ticks while recent */
+    this.lastGrassActiveMove = 0;
     this.inBattle = false;
     this.battleId = null;
     this.inMatchmaking = false;

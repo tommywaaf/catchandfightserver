@@ -1,6 +1,9 @@
 const { pool } = require("./db");
 const InventoryManager = require("./InventoryManager");
 
+/** No encounter progress unless the client sent a recent move while in grass (standing still = no catches) */
+const GRASS_MOVE_STALE_MS = 400;
+
 class EncounterManager {
   constructor() {
     this.speciesList = [];
@@ -38,8 +41,10 @@ class EncounterManager {
   }
 
   tick(deltaSeconds, questManager) {
+    const now = Date.now();
     for (const player of this.trackedPlayers) {
       if (!player.alive || !player.isInGrass || player.inBattle) continue;
+      if (now - (player.lastGrassActiveMove || 0) > GRASS_MOVE_STALE_MS) continue;
 
       player.encounterTimer -= deltaSeconds;
       if (player.encounterTimer <= 0) {

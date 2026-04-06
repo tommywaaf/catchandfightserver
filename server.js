@@ -236,6 +236,9 @@ function handleMove(player, msg) {
   const z = Number(msg.z) || 0;
   const rotY = Number(msg.rotY) || 0;
   player.updatePosition(x, y, z, rotY);
+  if (player.isInGrass) {
+    player.lastGrassActiveMove = Date.now();
+  }
 }
 
 function handleSwitchWorld(player, msg) {
@@ -253,6 +256,9 @@ function handleGrassStatus(player, msg) {
     return;
   }
   player.isInGrass = !!msg.inGrass;
+  if (player.isInGrass) {
+    player.lastGrassActiveMove = 0;
+  }
   console.log(`[grassStatus] ${player.name} inGrass=${player.isInGrass}, timer=${player.encounterTimer?.toFixed(1)}s`);
 }
 
