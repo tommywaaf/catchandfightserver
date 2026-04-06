@@ -5,7 +5,7 @@
  *   node clearQuestProgress.js --grass   — also set everyone’s grass unlock_tier to 0
  *
  * After running, each user gets mix_catch_10 again on next world join (see QuestManager.getQuests).
- * Does NOT touch players, creatures, or species (unlike seed.js).
+ * Does NOT touch players, creatures or species (unlike seed.js).
  */
 const { pool, initDB } = require("./db");
 
