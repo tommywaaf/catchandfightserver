@@ -146,7 +146,26 @@ function handleMessage(player, msg) {
     case "tradeCancel":
       handleTradeCancel(player);
       break;
+    case "chat":
+      handleChat(player, msg);
+      break;
   }
+}
+
+function handleChat(player, msg) {
+  if (!player.authenticated || player.worldId === null) return;
+  const raw = typeof msg.text === "string" ? msg.text : "";
+  const text = raw.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 256);
+  if (!text) return;
+  const world = worldManager.getWorld(player.worldId);
+  if (!world) return;
+  const senderName = String(player.name || "Player").slice(0, 32);
+  world.broadcast({
+    type: "chat",
+    senderId: player.id,
+    senderName,
+    text,
+  });
 }
 
 async function handleRegister(player, msg) {
