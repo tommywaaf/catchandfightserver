@@ -9,6 +9,7 @@
     "clear-quests-grass": "node clearQuestProgress.js --grass"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "bcrypt": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.20.0",

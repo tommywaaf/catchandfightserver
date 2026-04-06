@@ -1,4 +1,20 @@
+try {
+  require("dotenv").config();
+} catch {
+  /* optional; run: npm install dotenv — or set DATABASE_URL in the shell */
+}
+
 const { Pool } = require("pg");
+
+if (!process.env.DATABASE_URL) {
+  console.error(
+    "DATABASE_URL is not set.\n" +
+      "  • Create a .env file in this folder with: DATABASE_URL=postgresql://...\n" +
+      '  • Or in PowerShell: $env:DATABASE_URL="postgresql://..."\n' +
+      "See .env.example."
+  );
+  process.exit(1);
+}
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
