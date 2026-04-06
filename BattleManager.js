@@ -137,8 +137,8 @@ class BattleManager {
     console.log(`[Battle ${battleId}] submitAction from ${userId}: action=${msg.action}, phase=${battle.phase}`);
 
     if (battle.phase === "forceSwapping") {
-      if (msg.action !== "swap" && msg.action !== "forceSwap") {
-        console.log(`[Battle ${battleId}] Ignoring non-swap action during forceSwapping`);
+      if (msg.action !== "forceSwap") {
+        console.log(`[Battle ${battleId}] Ignoring non-forceSwap action during forceSwapping`);
         return;
       }
       const expectedSide = battle.forceSwapSide;
@@ -150,6 +150,7 @@ class BattleManager {
 
       const creatureIndex = Math.min(4, Math.max(0, Number(msg.creatureIndex) || 0));
       const side = isP1 ? battle.player1 : battle.player2;
+      if (!side.party[creatureIndex]) return;
       if (creatureIndex === side.activeIndex) return;
       if (side.party[creatureIndex].currentHp <= 0) return;
 
@@ -159,6 +160,21 @@ class BattleManager {
 
     if (battle.phase !== "choosing") {
       console.log(`[Battle ${battleId}] Ignoring action, phase is ${battle.phase}`);
+      return;
+    }
+
+    if (msg.action !== "ability" && msg.action !== "swap") {
+      console.log(`[Battle ${battleId}] Ignoring invalid action during choosing: ${msg.action}`);
+      return;
+    }
+
+    let sideKey = null;
+    if (userId === battle.player1.userId) sideKey = "p1";
+    else if (userId === battle.player2.userId) sideKey = "p2";
+    else return;
+
+    if (battle.pendingActions[sideKey]) {
+      console.log(`[Battle ${battleId}] Ignoring duplicate action from ${sideKey} in turn ${battle.turn}`);
       return;
     }
 
@@ -174,11 +190,7 @@ class BattleManager {
       if (side.party[action.creatureIndex].currentHp <= 0) return;
     }
 
-    if (userId === battle.player1.userId) {
-      battle.pendingActions.p1 = action;
-    } else if (userId === battle.player2.userId) {
-      battle.pendingActions.p2 = action;
-    }
+    battle.pendingActions[sideKey] = action;
 
     if (battle.player2.isBot && battle.pendingActions.p1 && !battle.pendingActions.p2) {
       battle.pendingActions.p2 = this.botDecision(battle);
