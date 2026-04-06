@@ -396,8 +396,12 @@ function handleBattleAction(player, msg) {
 }
 
 function handleFindBattle(player) {
-  if (!player.authenticated || player.inBattle) return;
+  if (!player.authenticated || player.inBattle) {
+    player.send({ type: "matchmakingStatus", status: "cancelled" });
+    return;
+  }
   if (!player.party || player.party.length === 0) {
+    player.send({ type: "matchmakingStatus", status: "cancelled" });
     player.send({ type: "error", message: "You need creatures in your party to battle" });
     return;
   }

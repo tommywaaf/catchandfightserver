@@ -14,16 +14,23 @@ class MatchmakingManager {
   }
 
   addToQueue(player) {
+    if (!this.isPlayerQueueEligible(player)) {
+      player.send({ type: "matchmakingStatus", status: "cancelled" });
+      return;
+    }
+
     if (this.queue.find((e) => e.player.userId === player.userId)) {
       player.send({ type: "matchmakingStatus", status: "already_searching" });
       return;
     }
 
+    this.pruneQueue();
+
     player.inMatchmaking = true;
     player.matchmakingJoinedAt = Date.now();
 
-    if (this.queue.length > 0) {
-      const opponent = this.queue.shift();
+    const opponent = this.takeNextOpponentFor(player);
+    if (opponent) {
       opponent.player.inMatchmaking = false;
       player.inMatchmaking = false;
 
@@ -33,6 +40,8 @@ class MatchmakingManager {
       this.battleManager.createBattle(opponent.player, player, false).then((battle) => {
         if (!battle) {
           console.error("Battle creation returned null");
+          opponent.player.send({ type: "matchmakingStatus", status: "cancelled" });
+          player.send({ type: "matchmakingStatus", status: "cancelled" });
           opponent.player.send({ type: "error", message: "Battle creation failed" });
           player.send({ type: "error", message: "Battle creation failed" });
           return;
@@ -43,6 +52,8 @@ class MatchmakingManager {
         console.log(`Battle ${battle.id} started: ${opponent.player.name} vs ${player.name}`);
       }).catch((err) => {
         console.error("Battle creation error:", err.message);
+        opponent.player.send({ type: "matchmakingStatus", status: "cancelled" });
+        player.send({ type: "matchmakingStatus", status: "cancelled" });
         opponent.player.send({ type: "error", message: "Battle creation failed" });
         player.send({ type: "error", message: "Battle creation failed" });
       });
@@ -63,6 +74,8 @@ class MatchmakingManager {
   }
 
   async tick() {
+    this.pruneQueue();
+
     const now = Date.now();
     const toRemove = [];
 
@@ -149,6 +162,43 @@ class MatchmakingManager {
     }
 
     return party;
+  }
+
+  isPlayerQueueEligible(player) {
+    return !!(
+      player &&
+      player.authenticated &&
+      !player.inBattle &&
+      player.ws &&
+      player.ws.readyState === 1 &&
+      Array.isArray(player.party) &&
+      player.party.length > 0
+    );
+  }
+
+  pruneQueue() {
+    this.queue = this.queue.filter((entry) => {
+      if (!entry || !entry.player) return false;
+      const ok = this.isPlayerQueueEligible(entry.player);
+      if (!ok) {
+        entry.player.inMatchmaking = false;
+      }
+      return ok;
+    });
+  }
+
+  takeNextOpponentFor(player) {
+    while (this.queue.length > 0) {
+      const entry = this.queue.shift();
+      if (!entry || !entry.player) continue;
+      if (entry.player.userId === player.userId) continue;
+      if (!this.isPlayerQueueEligible(entry.player)) {
+        entry.player.inMatchmaking = false;
+        continue;
+      }
+      return entry;
+    }
+    return null;
   }
 }
 
