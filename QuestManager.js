@@ -1,19 +1,171 @@
 const { pool } = require("./db");
 const InventoryManager = require("./InventoryManager");
+const { LIMITS } = require("./statClamp");
+
+/** Linear quest order (first incomplete is active). */
+const MIXED_QUEST_CHAIN = [
+  "mix_catch_10",
+  "mix_battle_1",
+  "mix_catch_5",
+  "mix_brumble",
+  "mix_ability_primary",
+  "mix_speed_98",
+  "mix_catch_8",
+  "mix_battle_2",
+  "mix_perfect_primary",
+  "mix_battle_5",
+];
 
 const QUESTS = [
-  { id: "catch_10", description: "Catch 10 escaped lab creatures", target: 10, next: "win_pvp_1" },
-  { id: "win_pvp_1", description: "Win 1 battle against another player", target: 1, next: "hunt_flaro", rewardUnlockTier: 1, unlockAdded: 4 },
-  { id: "hunt_flaro", description: "Catch 1 Flaro in grass (+4 hidden species unlocked)", target: 1, speciesName: "Flaro", next: "hunt_drifin", rewardUnlockTier: 2, unlockAdded: 4 },
-  { id: "hunt_drifin", description: "Catch 1 Drifin in grass (+4 hidden species unlocked)", target: 1, speciesName: "Drifin", next: "hunt_ripple", rewardUnlockTier: 3, unlockAdded: 4 },
-  { id: "hunt_ripple", description: "Catch 1 Ripple in grass (+4 hidden species unlocked)", target: 1, speciesName: "Ripple", next: "hunt_charby", rewardUnlockTier: 4, unlockAdded: 4 },
-  { id: "hunt_charby", description: "Catch 1 Charby in grass (+3 hidden species unlocked)", target: 1, speciesName: "Charby", next: "hunt_twinkl", rewardUnlockTier: 5, unlockAdded: 3 },
-  { id: "hunt_twinkl", description: "Catch 1 Twinkl in grass", target: 1, speciesName: "Twinkl", next: null },
+  {
+    id: "mix_catch_10",
+    description: "Catch 10 creatures in the grass",
+    target: 10,
+    next: "mix_battle_1",
+    trigger: "grassCatch",
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_battle_1",
+    description: "Win a battle (player or training bot)",
+    target: 1,
+    next: "mix_catch_5",
+    trigger: "battleWin",
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_catch_5",
+    description: "Catch 5 more creatures in the grass",
+    target: 5,
+    next: "mix_brumble",
+    trigger: "grassCatch",
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_brumble",
+    description: "Catch a Brumble in the grass",
+    target: 1,
+    next: "mix_ability_primary",
+    trigger: "grassCatch",
+    speciesName: "Brumble",
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_ability_primary",
+    description: "Catch a creature that has an ability using one of its primary stats",
+    target: 1,
+    next: "mix_speed_98",
+    trigger: "grassCatch",
+    requireAlignedAbility: true,
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_speed_98",
+    description: "Catch a very fast creature (speed 98+)",
+    target: 1,
+    next: "mix_catch_8",
+    trigger: "grassCatch",
+    minSpeed: 98,
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_catch_8",
+    description: "Catch 8 more creatures in the grass",
+    target: 8,
+    next: "mix_battle_2",
+    trigger: "grassCatch",
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_battle_2",
+    description: "Win 2 more battles (player or bot)",
+    target: 2,
+    next: "mix_perfect_primary",
+    trigger: "battleWin",
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_perfect_primary",
+    description: "Catch a creature with perfect primaries (each primary at max for its pole: ±50)",
+    target: 1,
+    next: "mix_battle_5",
+    trigger: "grassCatch",
+    requirePerfectPrimary: true,
+    grantPoolExpand: true,
+  },
+  {
+    id: "mix_battle_5",
+    description: "Win 5 more battles (player or bot) — grass holds every species; discover them in the wild",
+    target: 5,
+    next: null,
+    trigger: "battleWin",
+    grantPoolExpand: false,
+  },
 ];
+
+function chainIndex(questId) {
+  const i = MIXED_QUEST_CHAIN.indexOf(questId);
+  return i === -1 ? 999 : i;
+}
+
+/** Primary stats at pole cap: right → +50, left → -50 (matches statClamp primary limits). */
+function hasPerfectPrimaryStats(creature) {
+  if (!creature) return false;
+  const p1 = creature.primaryStat1;
+  const side1 = creature.primarySide1;
+  if (!p1 || !side1) return false;
+  const ideal1 = side1 === "right" ? LIMITS.primary.max : LIMITS.primary.min;
+  if (Number(creature[p1]) !== ideal1) return false;
+
+  const p2 = creature.primaryStat2;
+  const side2 = creature.primarySide2;
+  if (p2 && String(p2).trim()) {
+    if (!side2) return false;
+    const ideal2 = side2 === "right" ? LIMITS.primary.max : LIMITS.primary.min;
+    if (Number(creature[p2]) !== ideal2) return false;
+  }
+  return true;
+}
+
+function abilityAlignsWithPrimary(creature) {
+  const p1 = (creature.primaryStat1 || "").toLowerCase().trim();
+  const p2 = (creature.primaryStat2 || "").toLowerCase().trim();
+  const abs = creature.abilities || [];
+  for (const a of abs) {
+    if (!a || !a.abilityId) continue;
+    const s1 = (a.stat1 || "").toLowerCase().trim();
+    const s2 = (a.stat2 || "").toLowerCase().trim();
+    if (p1 && (s1 === p1 || s2 === p1)) return true;
+    if (p2 && (s1 === p2 || s2 === p2)) return true;
+  }
+  return false;
+}
+
+function grassCatchMatches(def, creature) {
+  if (!creature) return false;
+  if (def.speciesName && String(creature.speciesName).toLowerCase() !== def.speciesName.toLowerCase()) return false;
+  if (typeof def.minSpeed === "number" && Number(creature.speed) < def.minSpeed) return false;
+  if (def.requireAlignedAbility && !abilityAlignsWithPrimary(creature)) return false;
+  if (def.requirePerfectPrimary && !hasPerfectPrimaryStats(creature)) return false;
+  return true;
+}
 
 class QuestManager {
   getQuestDef(questId) {
     return QUESTS.find((q) => q.id === questId);
+  }
+
+  async getActiveQuestId(userId) {
+    const result = await pool.query(
+      "SELECT quest_id, completed FROM quest_progress WHERE user_id = $1",
+      [userId]
+    );
+    const byId = new Map(result.rows.map((r) => [r.quest_id, r]));
+    for (const qid of MIXED_QUEST_CHAIN) {
+      const row = byId.get(qid);
+      if (!row || !row.completed) return qid;
+    }
+    return null;
   }
 
   async getQuests(userId) {
@@ -33,14 +185,16 @@ class QuestManager {
       };
     });
 
+    quests.sort((a, b) => chainIndex(a.questId) - chainIndex(b.questId));
+
     if (quests.length === 0) {
       await pool.query(
         "INSERT INTO quest_progress (user_id, quest_id, progress, completed) VALUES ($1, $2, 0, FALSE) ON CONFLICT DO NOTHING",
-        [userId, "catch_10"]
+        [userId, "mix_catch_10"]
       );
-      const def = this.getQuestDef("catch_10");
+      const def = this.getQuestDef("mix_catch_10");
       quests.push({
-        questId: "catch_10",
+        questId: "mix_catch_10",
         description: def.description,
         progress: 0,
         target: def.target,
@@ -49,6 +203,39 @@ class QuestManager {
     }
 
     return quests;
+  }
+
+  async onGrassCatch(player, creature) {
+    if (!player?.userId) return;
+    const qid = await this.getActiveQuestId(player.userId);
+    if (!qid) return;
+    const def = this.getQuestDef(qid);
+    if (!def || def.trigger !== "grassCatch") return;
+    if (!grassCatchMatches(def, creature)) return;
+    await this.incrementQuest(player, qid, 1);
+  }
+
+  async onBattleWin(player) {
+    if (!player?.userId) return;
+    const qid = await this.getActiveQuestId(player.userId);
+    if (!qid) return;
+    const def = this.getQuestDef(qid);
+    if (!def || def.trigger !== "battleWin") return;
+    await this.incrementQuest(player, qid, 1);
+  }
+
+  /** Bump grass pool tier by 1 (max 5). Toast is intentionally vague (1–2 species). */
+  async applyGrassPoolReward(player) {
+    const cur = await InventoryManager.getGrassUnlockTier(player.userId);
+    if (cur >= 5) return;
+    const next = cur + 1;
+    await InventoryManager.setGrassUnlockTier(player.userId, next);
+    player.grassUnlockTier = next;
+    player.send({
+      type: "grassPoolUnlocked",
+      unlockTier: next,
+      vagueReward: true,
+    });
   }
 
   async incrementQuest(player, questId, amount) {
@@ -80,14 +267,8 @@ class QuestManager {
       );
     }
 
-    if (completed && typeof def.rewardUnlockTier === "number") {
-      await InventoryManager.setGrassUnlockTier(player.userId, def.rewardUnlockTier);
-      player.grassUnlockTier = await InventoryManager.getGrassUnlockTier(player.userId);
-      player.send({
-        type: "grassPoolUnlocked",
-        unlockTier: player.grassUnlockTier,
-        addedCount: Number(def.unlockAdded || 0),
-      });
+    if (completed && def.grantPoolExpand) {
+      await this.applyGrassPoolReward(player);
     }
 
     const quests = await this.getQuests(player.userId);
@@ -104,21 +285,6 @@ class QuestManager {
         speciesCount: dex.speciesCount,
         unlockTier: dex.unlockTier,
       });
-    }
-  }
-
-  async handleCreatureCaught(player, speciesName) {
-    if (!player?.userId || !speciesName) return;
-
-    const activeResult = await pool.query(
-      "SELECT quest_id FROM quest_progress WHERE user_id = $1 AND completed = FALSE",
-      [player.userId]
-    );
-    for (const row of activeResult.rows) {
-      const def = this.getQuestDef(row.quest_id);
-      if (!def || !def.speciesName) continue;
-      if (def.speciesName.toLowerCase() !== String(speciesName).toLowerCase()) continue;
-      await this.incrementQuest(player, row.quest_id, 1);
     }
   }
 }

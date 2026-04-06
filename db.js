@@ -114,6 +114,62 @@ async function initDB() {
       ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS grass_unlock_tier INTEGER NOT NULL DEFAULT 0;
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id VARCHAR(64) PRIMARY KEY,
+        applied_at TIMESTAMP DEFAULT NOW()
+      );
+    `);
+    const mig = await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", ["reset_grass_quests_v1"]);
+    if (mig.rows.length === 0) {
+      await client.query("DELETE FROM quest_progress");
+      await client.query("UPDATE user_grass_progress SET unlock_tier = 0");
+      await client.query("INSERT INTO schema_migrations (id) VALUES ('reset_grass_quests_v1')");
+      console.log("Applied one-time migration: cleared quest_progress, reset grass unlock_tier for all users");
+    }
+
+    const mig2 = await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", ["reset_pool_quests_v1"]);
+    if (mig2.rows.length === 0) {
+      await client.query("DELETE FROM quest_progress");
+      await client.query("UPDATE user_grass_progress SET unlock_tier = 0");
+      await client.query("INSERT INTO schema_migrations (id) VALUES ('reset_pool_quests_v1')");
+      console.log("Applied migration reset_pool_quests_v1: mixed quest chain (catch/battle objectives)");
+    }
+
+    const mv = await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", ["quest_chain_perfect_veil_v1"]);
+    if (mv.rows.length === 0) {
+      await client.query(
+        "UPDATE quest_progress SET quest_id = 'mix_perfect_primary', progress = 0 WHERE quest_id = 'mix_dual_primary' AND completed = FALSE"
+      );
+      await client.query("UPDATE quest_progress SET quest_id = 'mix_perfect_primary' WHERE quest_id = 'mix_dual_primary' AND completed = TRUE");
+      await client.query(
+        "UPDATE quest_progress SET quest_id = 'mix_battle_5', progress = 0 WHERE quest_id = 'mix_catch_12' AND completed = FALSE"
+      );
+      await client.query(
+        "UPDATE quest_progress SET quest_id = 'mix_battle_5', progress = 5, completed = TRUE WHERE quest_id = 'mix_catch_12' AND completed = TRUE"
+      );
+      await client.query("INSERT INTO schema_migrations (id) VALUES ('quest_chain_perfect_veil_v1')");
+      console.log("Applied quest_chain_perfect_veil_v1: perfect-primary step, win-5 finale");
+    }
+
+    const ev = await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", ["rare_grass_twinkl_cleanup_v1"]);
+    if (ev.rows.length === 0) {
+      const vid = await client.query("SELECT id FROM creature_species WHERE name = 'Veilstar' LIMIT 1");
+      if (vid.rows.length > 0) {
+        const sid = vid.rows[0].id;
+        const cnt = await client.query("SELECT COUNT(*)::int AS c FROM player_creatures WHERE species_id = $1", [sid]);
+        if (cnt.rows[0].c === 0) {
+          await client.query("DELETE FROM species_abilities WHERE species_id = $1", [sid]);
+          await client.query("DELETE FROM user_species_discovery WHERE species_id = $1", [sid]);
+          await client.query("DELETE FROM creature_species WHERE id = $1", [sid]);
+          console.log("Removed unused species Veilstar; ultra-rare grass is now Twinkl (see grassRarity.js)");
+        } else {
+          console.log("Veilstar still owned by players — left in DB; ultra-rare logic now targets Twinkl only");
+        }
+      }
+      await client.query("INSERT INTO schema_migrations (id) VALUES ('rare_grass_twinkl_cleanup_v1')");
+    }
+
     console.log("Database tables initialized");
   } finally {
     client.release();

@@ -37,11 +37,10 @@ class MatchmakingManager {
           player.send({ type: "error", message: "Battle creation failed" });
           return;
         }
-        console.log(`Battle ${battle.id} started: ${opponent.player.name} vs ${player.name}`);
         if (qm) {
-          opponent.player._questCallback = () => qm.incrementQuest(opponent.player, "win_pvp_1", 1);
-          player._questCallback = () => qm.incrementQuest(player, "win_pvp_1", 1);
+          battle.questOnHumanWin = (winnerRef) => qm.onBattleWin(winnerRef);
         }
+        console.log(`Battle ${battle.id} started: ${opponent.player.name} vs ${player.name}`);
       }).catch((err) => {
         console.error("Battle creation error:", err.message);
         opponent.player.send({ type: "error", message: "Battle creation failed" });
@@ -87,10 +86,10 @@ class MatchmakingManager {
 
           const battle = await this.battleManager.createBattle(entry.player, botPlayer, true);
           if (battle) {
-            console.log(`Bot battle ${battle.id} started for ${entry.player.name}`);
             if (this.questManager) {
-              entry.player._questCallback = () => this.questManager.incrementQuest(entry.player, "win_pvp_1", 1);
+              battle.questOnHumanWin = (winnerRef) => this.questManager.onBattleWin(winnerRef);
             }
+            console.log(`Bot battle ${battle.id} started for ${entry.player.name}`);
           } else {
             console.error("Bot battle creation returned null");
             entry.player.send({ type: "error", message: "Bot battle failed" });

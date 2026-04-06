@@ -471,8 +471,8 @@ class BattleManager {
 
     if (winner && winner !== "draw") {
       const winnerSide = winner === "p1" ? battle.player1 : battle.player2;
-      if (!winnerSide.isBot && winnerSide.ref && winnerSide.ref._questCallback) {
-        winnerSide.ref._questCallback();
+      if (!winnerSide.isBot && winnerSide.ref && typeof battle.questOnHumanWin === "function") {
+        battle.questOnHumanWin(winnerSide.ref);
       }
     }
   }

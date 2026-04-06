@@ -1,10 +1,11 @@
 const { pool } = require("./db");
 const InventoryManager = require("./InventoryManager");
+const { clampElemental, isPrimaryStat, getPrimarySide } = require("./statClamp");
+const { RARE_GRASS_SPECIES_NAME, RARE_GRASS_ENCOUNTER_CHANCE } = require("./grassRarity");
 
 /** No encounter progress unless the client sent a recent move while in grass (standing still = no catches) */
 const GRASS_MOVE_STALE_MS = 400;
 const ELEMENTAL_STATS = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
-const PRIMARY_FLOOR = { right: 1, left: -1 };
 
 class EncounterManager {
   constructor() {
@@ -113,7 +114,7 @@ class EncounterManager {
       return;
     }
 
-    const result = await InventoryManager.addCreature(player.userId, species.id, stats, selectedAbilities);
+    const result = await tryAddCreature(player.userId, species.id, stats, selectedAbilities);
 
     if (result.success) {
       await InventoryManager.recordDiscovery(player.userId, species.id);
@@ -129,12 +130,15 @@ class EncounterManager {
         player.party = await InventoryManager.getParty(player.userId);
       }
 
-      await questManager.incrementQuest(player, "catch_10", 1);
-      await questManager.handleCreatureCaught(player, species.name);
+      await questManager.onGrassCatch(player, creature);
     } else {
+      const msg =
+        result.error === "Storage full"
+          ? "Storage is full — swap a creature or make room."
+          : "Could not save the creature. Please try again.";
       player.send({
         type: "creatureEscaped",
-        message: result.error || "Storage full, creature escaped!",
+        message: msg,
       });
     }
   }
@@ -147,13 +151,21 @@ class EncounterManager {
     }
     if (pool.length === 0) return null;
 
-    const totalWeight = pool.reduce((sum, s) => sum + Number(s.find_weight || 0), 0);
+    const rare = pool.find((s) => s.name === RARE_GRASS_SPECIES_NAME);
+    const weightedPool = rare ? pool.filter((s) => s.name !== RARE_GRASS_SPECIES_NAME) : pool;
+
+    if (rare && Math.random() < RARE_GRASS_ENCOUNTER_CHANCE) {
+      return rare;
+    }
+
+    const totalWeight = weightedPool.reduce((sum, s) => sum + Number(s.find_weight || 0), 0);
+    if (totalWeight <= 0) return rare || pool[0];
     let roll = Math.random() * totalWeight;
-    for (const species of pool) {
+    for (const species of weightedPool) {
       roll -= Number(species.find_weight || 0);
       if (roll <= 0) return species;
     }
-    return pool[pool.length - 1];
+    return weightedPool[weightedPool.length - 1];
   }
 
   async pushGrassDex(player) {
@@ -169,33 +181,26 @@ class EncounterManager {
   }
 }
 
+/** Retries transient DB failures so catches are not lost to a single bad transaction. */
+async function tryAddCreature(userId, speciesId, stats, abilityIds, maxAttempts = 3) {
+  let last = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 40 + attempt * 80));
+    }
+    last = await InventoryManager.addCreature(userId, speciesId, stats, abilityIds);
+    if (last.success) return last;
+    if (last.error === "Storage full") return last;
+  }
+  return last;
+}
+
 function rollElementalStat(statName, species, variance) {
   const baseKey = `base_${statName}`;
   const rolled = Number(species[baseKey]) + randVariance(variance);
-  const isPrimary = isPrimaryStat(species, statName);
+  const primary = isPrimaryStat(species, statName);
   const primarySide = getPrimarySide(species, statName);
-  return clampElemental(rolled, isPrimary, primarySide);
-}
-
-function isPrimaryStat(species, statName) {
-  return species.primary_stat1 === statName || species.primary_stat2 === statName;
-}
-
-function getPrimarySide(species, statName) {
-  if (species.primary_stat1 === statName) return species.primary_side1;
-  if (species.primary_stat2 === statName) return species.primary_side2;
-  return null;
-}
-
-function clampElemental(v, isPrimary, primarySide) {
-  const min = isPrimary ? -50 : -30;
-  const max = isPrimary ? 50 : 30;
-  let clamped = Math.max(min, Math.min(max, Math.round(v)));
-  if (isPrimary && primarySide && PRIMARY_FLOOR[primarySide] !== undefined) {
-    const floor = PRIMARY_FLOOR[primarySide];
-    clamped = primarySide === "left" ? Math.min(clamped, floor) : Math.max(clamped, floor);
-  }
-  return clamped;
+  return clampElemental(rolled, primary, primarySide);
 }
 
 function clampSpeed(v) {

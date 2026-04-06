@@ -29,7 +29,7 @@ class AuthManager {
 
       await pool.query(
         "INSERT INTO quest_progress (user_id, quest_id, progress, completed) VALUES ($1, $2, 0, FALSE)",
-        [user.id, "catch_10"]
+        [user.id, "mix_catch_10"]
       );
       await pool.query(
         "INSERT INTO user_grass_progress (user_id, unlock_tier) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",

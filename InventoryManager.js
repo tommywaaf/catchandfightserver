@@ -1,4 +1,6 @@
 const { pool } = require("./db");
+const { applyClampsToCreature } = require("./statClamp");
+const { RARE_GRASS_SPECIES_NAME, RARE_GRASS_ENCOUNTER_CHANCE } = require("./grassRarity");
 
 const PARTY_MAX = 5;
 const STORAGE_MAX = 500;
@@ -351,13 +353,27 @@ class InventoryManager {
     );
     const discoveredSet = new Set(discoveredResult.rows.map((r) => Number(r.species_id)));
     const unlockedSpecies = speciesResult.rows.filter((s) => Number(s.grass_unlock_tier) <= unlockTier);
-    const totalWeight = Math.max(1, unlockedSpecies.reduce((sum, s) => sum + Number(s.find_weight || 0), 0));
+    const rareUnlocked = unlockedSpecies.some((s) => s.name === RARE_GRASS_SPECIES_NAME);
+    const weightedUnlocked = rareUnlocked
+      ? unlockedSpecies.filter((s) => s.name !== RARE_GRASS_SPECIES_NAME)
+      : unlockedSpecies;
+    const sumWeights = Math.max(1, weightedUnlocked.reduce((sum, s) => sum + Number(s.find_weight || 0), 0));
+    const restP = 1 - (rareUnlocked ? RARE_GRASS_ENCOUNTER_CHANCE : 0);
 
     const entries = [];
     for (const species of speciesResult.rows) {
       const isDiscovered = discoveredSet.has(Number(species.id));
       const isUnlocked = Number(species.grass_unlock_tier) <= unlockTier;
-      const findChance = isUnlocked ? ((Number(species.find_weight || 0) / totalWeight) * 100) : 0;
+      let findChance = 0;
+      if (isUnlocked) {
+        if (species.name === RARE_GRASS_SPECIES_NAME) {
+          findChance = RARE_GRASS_ENCOUNTER_CHANCE * 100;
+        } else if (rareUnlocked) {
+          findChance = restP * (Number(species.find_weight || 0) / sumWeights) * 100;
+        } else {
+          findChance = (Number(species.find_weight || 0) / sumWeights) * 100;
+        }
+      }
       entries.push({
         slot: entries.length + 1,
         speciesId: Number(species.id),
@@ -400,7 +416,7 @@ class InventoryManager {
 }
 
 function formatCreature(row) {
-  return {
+  const c = {
     id: row.id,
     speciesId: row.species_id,
     speciesName: row.species_name,
@@ -422,6 +438,8 @@ function formatCreature(row) {
     partyPosition: row.party_position,
     abilities: (row.abilities || []).filter(a => a.abilityId !== null),
   };
+  applyClampsToCreature(c, row);
+  return c;
 }
 
 module.exports = InventoryManager;

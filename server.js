@@ -384,8 +384,7 @@ async function handleReplaceCreature(player, msg) {
       replacedId: lowest.id,
     });
     await encounterManager.pushGrassDex(player);
-    await questManager.incrementQuest(player, "catch_10", 1);
-    await questManager.handleCreatureCaught(player, pending.speciesName);
+    await questManager.onGrassCatch(player, creature);
   } else {
     player.send({ type: "error", message: result.error });
   }
