@@ -103,9 +103,35 @@ const QUESTS = [
   },
 ];
 
+const QUEST_IDS = new Set(QUESTS.map((q) => q.id));
+const LEGACY_QUEST_ID_MAP = {
+  catch_10: "mix_catch_10",
+  battle_1: "mix_battle_1",
+  catch_5: "mix_catch_5",
+  brumble: "mix_brumble",
+  ability_primary: "mix_ability_primary",
+  speed_98: "mix_speed_98",
+  catch_8: "mix_catch_8",
+  battle_2: "mix_battle_2",
+  perfect_primary: "mix_perfect_primary",
+  battle_5: "mix_battle_5",
+  dual_primary: "mix_perfect_primary",
+  catch_12: "mix_battle_5",
+};
+
 function chainIndex(questId) {
   const i = MIXED_QUEST_CHAIN.indexOf(questId);
   return i === -1 ? 999 : i;
+}
+
+function canonicalQuestId(rawQuestId) {
+  const raw = String(rawQuestId || "").trim();
+  if (!raw) return raw;
+  if (QUEST_IDS.has(raw)) return raw;
+  const mapped = LEGACY_QUEST_ID_MAP[raw];
+  if (mapped && QUEST_IDS.has(mapped)) return mapped;
+  const prefixed = raw.startsWith("mix_") ? raw : `mix_${raw}`;
+  return QUEST_IDS.has(prefixed) ? prefixed : raw;
 }
 
 /** Primary stats at pole cap: right → +50, left → -50 (matches statClamp primary limits). */
@@ -152,7 +178,30 @@ function grassCatchMatches(def, creature) {
 
 class QuestManager {
   getQuestDef(questId) {
-    return QUESTS.find((q) => q.id === questId);
+    return QUESTS.find((q) => q.id === canonicalQuestId(questId));
+  }
+
+  async normalizeQuestRows(userId, rows) {
+    const migrated = [];
+    for (const row of rows) {
+      const canonicalId = canonicalQuestId(row.quest_id);
+      migrated.push({ ...row, quest_id: canonicalId });
+      if (canonicalId === row.quest_id) continue;
+
+      await pool.query(
+        `INSERT INTO quest_progress (user_id, quest_id, progress, completed)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, quest_id) DO UPDATE
+         SET progress = GREATEST(quest_progress.progress, EXCLUDED.progress),
+             completed = (quest_progress.completed OR EXCLUDED.completed)`,
+        [userId, canonicalId, row.progress, row.completed]
+      );
+      await pool.query(
+        "DELETE FROM quest_progress WHERE user_id = $1 AND quest_id = $2",
+        [userId, row.quest_id]
+      );
+    }
+    return migrated;
   }
 
   async getActiveQuestId(userId) {
@@ -160,7 +209,8 @@ class QuestManager {
       "SELECT quest_id, completed FROM quest_progress WHERE user_id = $1",
       [userId]
     );
-    const byId = new Map(result.rows.map((r) => [r.quest_id, r]));
+    const rows = await this.normalizeQuestRows(userId, result.rows);
+    const byId = new Map(rows.map((r) => [r.quest_id, r]));
     for (const qid of MIXED_QUEST_CHAIN) {
       const row = byId.get(qid);
       if (!row || !row.completed) return qid;
@@ -173,8 +223,9 @@ class QuestManager {
       "SELECT quest_id, progress, completed FROM quest_progress WHERE user_id = $1",
       [userId]
     );
+    const rows = await this.normalizeQuestRows(userId, result.rows);
 
-    const quests = result.rows.map((row) => {
+    const quests = rows.map((row) => {
       const def = this.getQuestDef(row.quest_id);
       return {
         questId: row.quest_id,
@@ -240,16 +291,17 @@ class QuestManager {
 
   async incrementQuest(player, questId, amount) {
     if (!player.userId) return;
+    const canonicalId = canonicalQuestId(questId);
 
     const existing = await pool.query(
       "SELECT progress, completed FROM quest_progress WHERE user_id = $1 AND quest_id = $2",
-      [player.userId, questId]
+      [player.userId, canonicalId]
     );
 
     if (existing.rows.length === 0) return;
     if (existing.rows[0].completed) return;
 
-    const def = this.getQuestDef(questId);
+    const def = this.getQuestDef(canonicalId);
     if (!def) return;
 
     const newProgress = Math.min(existing.rows[0].progress + amount, def.target);
@@ -257,7 +309,7 @@ class QuestManager {
 
     await pool.query(
       "UPDATE quest_progress SET progress = $1, completed = $2 WHERE user_id = $3 AND quest_id = $4",
-      [newProgress, completed, player.userId, questId]
+      [newProgress, completed, player.userId, canonicalId]
     );
 
     if (completed && def.next) {
@@ -273,7 +325,7 @@ class QuestManager {
 
     const quests = await this.getQuests(player.userId);
     player.quests = quests;
-    player.send({ type: "questUpdated", quests, justCompleted: completed ? questId : null });
+    player.send({ type: "questUpdated", quests, justCompleted: completed ? canonicalId : null });
 
     if (completed) {
       const dex = await InventoryManager.getGrassDexState(player.userId);
