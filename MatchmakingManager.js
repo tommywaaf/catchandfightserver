@@ -1,4 +1,5 @@
 const { pool } = require("./db");
+const { rollStatsForSpecies } = require("./EncounterManager");
 
 const BOT_WAIT_MS = 60000;
 
@@ -143,20 +144,15 @@ class MatchmakingManager {
         }));
       }
 
+      const stats = rollStatsForSpecies(species);
       party.push({
         id: -1,
         speciesId: species.id,
         speciesName: species.name,
         nickname: null,
-        currentHp: species.base_hp,
-        maxHp: species.base_hp,
-        thermal: species.base_thermal,
-        density: species.base_density,
-        luminosity: species.base_luminosity,
-        voltage: species.base_voltage,
-        stability: species.base_stability,
-        magnetism: species.base_magnetism,
-        speed: species.base_speed,
+        currentHp: stats.hp,
+        maxHp: stats.hp,
+        ...stats,
         abilities,
       });
     }

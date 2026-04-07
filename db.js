@@ -40,14 +40,9 @@ async function initDB() {
         id SERIAL PRIMARY KEY,
         name VARCHAR(50) NOT NULL,
         base_hp INTEGER NOT NULL DEFAULT 500,
-        base_thermal INTEGER NOT NULL,
-        base_density INTEGER NOT NULL,
-        base_luminosity INTEGER NOT NULL,
-        base_voltage INTEGER NOT NULL,
-        base_stability INTEGER NOT NULL,
-        base_magnetism INTEGER NOT NULL,
-        base_speed INTEGER NOT NULL,
-        stat_variance INTEGER NOT NULL DEFAULT 10,
+        base_speed INTEGER NOT NULL DEFAULT 40,
+        primary_min INTEGER NOT NULL DEFAULT 1,
+        nonprimary_max INTEGER NOT NULL DEFAULT 20,
         primary_stat1 VARCHAR(20),
         primary_side1 VARCHAR(10),
         primary_stat2 VARCHAR(20),
@@ -193,6 +188,23 @@ async function initDB() {
       console.log(
         "Applied clear_all_quest_progress_v1: everyone starts fresh; first quest (mix_catch_10) is created on next login/join"
       );
+    }
+
+    const migRanges = await client.query("SELECT 1 FROM schema_migrations WHERE id = $1", ["stat_ranges_v1"]);
+    if (migRanges.rows.length === 0) {
+      await client.query(`
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS base_thermal;
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS base_density;
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS base_luminosity;
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS base_voltage;
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS base_stability;
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS base_magnetism;
+        ALTER TABLE creature_species DROP COLUMN IF EXISTS stat_variance;
+        ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS primary_min INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE creature_species ADD COLUMN IF NOT EXISTS nonprimary_max INTEGER NOT NULL DEFAULT 20;
+      `);
+      await client.query("INSERT INTO schema_migrations (id) VALUES ('stat_ranges_v1')");
+      console.log("Applied stat_ranges_v1: replaced base polarity columns with primary_min / nonprimary_max ranges");
     }
 
     console.log("Database tables initialized");

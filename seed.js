@@ -1,8 +1,5 @@
 const { pool, initDB } = require("./db");
 
-const STAT_NAMES = ["thermal", "density", "luminosity", "voltage", "stability", "magnetism"];
-const POLARITY_FLOOR = { right: 1, left: -1 };
-
 const SPECIES_DEFS = [
   { name: "Flaro", stat1: "thermal", stat1Side: "right", stat2: "luminosity", stat2Side: "right", weight: 14, tier: 0 },
   { name: "Pebbo", stat1: "density", stat1Side: "right", stat2: "stability", stat2Side: "right", weight: 14, tier: 0 },
@@ -96,25 +93,19 @@ async function seed() {
 
   console.log("Seeding named creature species...");
   for (const spec of SPECIES_DEFS) {
-    const stats = buildBaseStats(spec);
+    const ranges = buildSpeciesRanges(spec);
     const speed = buildBaseSpeed(spec.name);
-    const variance = 6 + (hashNumber(spec.name, 7));
 
     const r = await pool.query(
       `INSERT INTO creature_species
-       (name, base_hp, base_thermal, base_density, base_luminosity, base_voltage, base_stability, base_magnetism, base_speed, stat_variance, primary_stat1, primary_side1, primary_stat2, primary_side2, find_weight, grass_unlock_tier)
-       VALUES ($1, 500, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       (name, base_hp, base_speed, primary_min, nonprimary_max, primary_stat1, primary_side1, primary_stat2, primary_side2, find_weight, grass_unlock_tier)
+       VALUES ($1, 500, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id`,
       [
         spec.name,
-        stats.thermal,
-        stats.density,
-        stats.luminosity,
-        stats.voltage,
-        stats.stability,
-        stats.magnetism,
         speed,
-        variance,
+        ranges.primaryMin,
+        ranges.nonprimaryMax,
         spec.stat1,
         spec.stat1Side,
         spec.stat2,
@@ -163,27 +154,10 @@ function hashNumber(text, mod) {
   return hash % mod;
 }
 
-function buildBaseStats(spec) {
-  const values = {};
-  for (const stat of STAT_NAMES) {
-    // Non-primary stats stay in soft center bounds; hard cap rules are applied at roll time.
-    values[stat] = -18 + hashNumber(`${spec.name}:${stat}`, 37);
-  }
-
-  applyPrimary(values, spec.stat1, spec.stat1Side, 34);
-  if (spec.stat2 && spec.stat2Side) {
-    applyPrimary(values, spec.stat2, spec.stat2Side, 30);
-  }
-
-  return values;
-}
-
-function applyPrimary(values, stat, side, magnitude) {
-  if (!stat || !side) return;
-  const sign = side === "left" ? -1 : 1;
-  const raw = sign * magnitude;
-  const floor = POLARITY_FLOOR[side];
-  values[stat] = side === "left" ? Math.min(raw, floor) : Math.max(raw, floor);
+function buildSpeciesRanges(spec) {
+  const primaryMin = 1 + hashNumber(`${spec.name}:primaryMin`, 20);
+  const nonprimaryMax = 15 + hashNumber(`${spec.name}:npMax`, 16);
+  return { primaryMin, nonprimaryMax };
 }
 
 function buildBaseSpeed(name) {

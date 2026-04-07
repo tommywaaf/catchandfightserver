@@ -1,6 +1,6 @@
 const { pool } = require("./db");
 const InventoryManager = require("./InventoryManager");
-const { clampElemental, isPrimaryStat, getPrimarySide } = require("./statClamp");
+const { isPrimaryStat, getPrimarySide } = require("./statClamp");
 const { RARE_GRASS_SPECIES_NAME, RARE_GRASS_ENCOUNTER_CHANCE } = require("./grassRarity");
 
 /** No encounter progress unless the client sent a recent move while in grass (standing still = no catches) */
@@ -68,18 +68,8 @@ class EncounterManager {
 
     const species = this.pickSpeciesForPlayer(player);
     if (!species) return;
-    const variance = species.stat_variance;
 
-    const stats = {
-      hp: species.base_hp,
-      thermal: rollElementalStat("thermal", species, variance),
-      density: rollElementalStat("density", species, variance),
-      luminosity: rollElementalStat("luminosity", species, variance),
-      voltage: rollElementalStat("voltage", species, variance),
-      stability: rollElementalStat("stability", species, variance),
-      magnetism: rollElementalStat("magnetism", species, variance),
-      speed: clampSpeed(species.base_speed + randVariance(variance)),
-    };
+    const stats = rollStatsForSpecies(species);
 
     const availableAbilities = this.speciesAbilities.get(species.id) || [];
     const shuffled = [...availableAbilities].sort(() => Math.random() - 0.5);
@@ -195,24 +185,43 @@ async function tryAddCreature(userId, speciesId, stats, abilityIds, maxAttempts 
   return last;
 }
 
-function rollElementalStat(statName, species, variance) {
-  const baseKey = `base_${statName}`;
-  const rolled = Number(species[baseKey]) + randVariance(variance);
+function rollStatsForSpecies(species) {
+  return {
+    hp: species.base_hp,
+    thermal: rollElementalStat("thermal", species),
+    density: rollElementalStat("density", species),
+    luminosity: rollElementalStat("luminosity", species),
+    voltage: rollElementalStat("voltage", species),
+    stability: rollElementalStat("stability", species),
+    magnetism: rollElementalStat("magnetism", species),
+    speed: Number(species.base_speed),
+  };
+}
+
+function rollElementalStat(statName, species) {
   const primary = isPrimaryStat(species, statName);
   const primarySide = getPrimarySide(species, statName);
-  return clampElemental(rolled, primary, primarySide);
+
+  if (primary) {
+    const min = Number(species.primary_min) || 1;
+    if (primarySide === "right") {
+      return randInt(min, 50);
+    } else {
+      return randInt(-50, -min);
+    }
+  } else {
+    const max = Number(species.nonprimary_max) || 20;
+    return randInt(-max, max);
+  }
 }
 
-function clampSpeed(v) {
-  return Math.max(0, Math.min(100, Math.round(v)));
-}
-
-function randVariance(v) {
-  return (Math.random() * 2 - 1) * v;
+function randInt(min, max) {
+  return min + Math.floor(Math.random() * (max - min + 1));
 }
 
 function polarityScore(stats) {
   return ELEMENTAL_STATS.reduce((sum, stat) => sum + Math.abs(Number(stats[stat] || 0)), 0) + Number(stats.speed || 0);
 }
 
+EncounterManager.rollStatsForSpecies = rollStatsForSpecies;
 module.exports = EncounterManager;
