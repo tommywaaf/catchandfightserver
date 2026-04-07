@@ -61,11 +61,11 @@ const QUESTS = [
   },
   {
     id: "mix_speed_98",
-    description: "Catch a very fast creature (speed 98+)",
+    description: "Catch a very fast creature (speed 57+)",
     target: 1,
     next: "mix_catch_8",
     trigger: "grassCatch",
-    minSpeed: 98,
+    minSpeed: 57,
     grantPoolExpand: true,
   },
   {
